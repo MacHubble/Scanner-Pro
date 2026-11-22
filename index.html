@@ -1,0 +1,2079 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#F2F2F7" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="My Scans" />
+  <title>My Scans — Scanner PDF & OCR</title>
+  <link id="pwa-manifest" rel="manifest" href="" />
+  <link rel="apple-touch-icon" id="apple-icon" href="" />
+  
+  <!-- Librerie esterne CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    :root {
+      --ios-bg: #F2F2F7;
+      --ios-card: #FFFFFF;
+      --ios-blue: #007AFF;
+      --ios-green: #34C759;
+      --ios-separator: #C6C6C8;
+      --safe-top: env(safe-area-inset-top, 0px);
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+    }
+
+    * {
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: var(--ios-bg);
+      color: #000000;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      overflow-x: hidden;
+      overscroll-behavior-y: none;
+    }
+
+    .ios-blur {
+      background: rgba(249, 249, 249, 0.88);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+    }
+
+    .ios-dark-blur {
+      background: rgba(28, 28, 30, 0.85);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+    }
+
+    .pt-safe { padding-top: var(--safe-top); }
+    .pb-safe { padding-bottom: var(--safe-bottom); }
+
+    /* Animazioni stile iOS */
+    @keyframes slideUp {
+      from { transform: translateY(100%); opacity: 0.7; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    .animate-slide-up { animation: slideUp 0.28s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+    .animate-fade-in { animation: fadeIn 0.2s ease-out forwards; }
+
+    /* Maniglie ritaglio stile My Scans */
+    .crop-handle {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: rgba(0, 122, 255, 0.28);
+      border: 2.5px solid #007AFF;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+      position: absolute;
+      transform: translate(-50%, -50%);
+      touch-action: none;
+      z-index: 30;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .crop-handle::after {
+      content: '';
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #FFFFFF;
+    }
+    .crop-handle.active {
+      transform: translate(-50%, -50%) scale(1.25);
+      background: rgba(0, 122, 255, 0.45);
+    }
+
+    /* Slider stile iOS */
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      background: transparent;
+      cursor: pointer;
+    }
+    input[type="range"]::-webkit-slider-runnable-track {
+      height: 4px;
+      border-radius: 2px;
+      background: #3A3A3C;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: #FFFFFF;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+      margin-top: -9px;
+    }
+
+    /* Scrollbar nascosta */
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+    /* Testo selezionabile nell'OCR */
+    .selectable-text {
+      user-select: text;
+      -webkit-user-select: text;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+  <!-- ==================== VISTA PRINCIPALE (ARCHIVIO) ==================== -->
+  <div id="main-app" class="flex-1 flex flex-col min-h-screen pb-24">
+    
+    <!-- Header iOS -->
+    <header class="sticky top-0 z-20 ios-blur border-b border-gray-300/70 pt-safe">
+      <div class="max-w-3xl mx-auto px-4 pt-2 pb-3">
+        <div class="flex items-center justify-between h-10">
+          <button id="btn-select-mode" onclick="toggleSelectMode()" class="text-[#007AFF] text-[17px] font-normal active:opacity-60">
+            Seleziona
+          </button>
+          <div class="flex items-center gap-3">
+            <button onclick="openSortMenu()" class="p-1.5 text-[#007AFF] active:opacity-60" title="Ordina">
+              <i data-lucide="arrow-up-down" class="w-5 h-5"></i>
+            </button>
+            <button onclick="toggleViewMode()" id="btn-view-mode" class="p-1.5 text-[#007AFF] active:opacity-60" title="Cambia vista">
+              <i data-lucide="list" class="w-5 h-5"></i>
+            </button>
+          </div>
+        </div>
+        <div class="flex items-end justify-between mt-1">
+          <h1 id="header-title" class="text-[32px] font-bold tracking-tight leading-tight text-black">Documenti</h1>
+          <span id="doc-counter" class="text-xs font-medium text-gray-500 pb-1.5">0 elementi</span>
+        </div>
+
+        <!-- Barra selezione multipla (nascosta di default) -->
+        <div id="selection-bar" class="hidden mt-2 pt-2 border-t border-gray-200 flex items-center justify-between text-sm">
+          <span id="selected-count" class="font-semibold text-gray-700">0 selezionati</span>
+          <div class="flex gap-4">
+            <button onclick="mergeSelectedDocs()" class="text-[#007AFF] font-medium">Unisci PDF</button>
+            <button onclick="deleteSelectedDocs()" class="text-red-500 font-medium">Elimina</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Contenuto Dinamico dei Tab -->
+    <main class="flex-1 max-w-3xl w-full mx-auto px-4 pt-4">
+      
+      <!-- TAB 1: DOCUMENTI -->
+      <section id="tab-documents" class="space-y-4">
+        <!-- Pill filtro cartella attiva -->
+        <div id="active-folder-banner" class="hidden bg-blue-50 border border-blue-200 rounded-xl px-3.5 py-2 flex items-center justify-between">
+          <div class="flex items-center gap-2 text-[#007AFF] text-sm font-medium">
+            <i data-lucide="folder" class="w-4 h-4"></i>
+            <span id="active-folder-name">Cartella</span>
+          </div>
+          <button onclick="setFolderFilter('all')" class="text-xs text-[#007AFF] font-semibold">Mostra tutti</button>
+        </div>
+
+        <!-- Empty State -->
+        <div id="empty-state" class="hidden flex flex-col items-center justify-center text-center py-20 px-6">
+          <div class="w-20 h-20 rounded-3xl bg-white shadow-sm flex items-center justify-center mb-4 border border-gray-100">
+            <i data-lucide="scan-line" class="w-10 h-10 text-[#007AFF]"></i>
+          </div>
+          <h2 class="text-lg font-semibold text-gray-900">Nessun documento</h2>
+          <p class="text-sm text-gray-500 mt-1 max-w-xs">
+            Tocca il pulsante <span class="text-[#34C759] font-semibold">+</span> qui sotto per scansionare un documento o importare immagini dalla galleria.
+          </p>
+        </div>
+
+        <!-- Griglia / Lista Documenti -->
+        <div id="documents-container" class="grid grid-cols-2 sm:grid-cols-3 gap-3.5"></div>
+      </section>
+
+      <!-- TAB 2: CARTELLE -->
+      <section id="tab-folders" class="hidden space-y-4">
+        <div class="flex justify-between items-center">
+          <p class="text-xs uppercase font-semibold text-gray-500 tracking-wider">Le tue cartelle</p>
+          <button onclick="createNewFolder()" class="text-sm font-semibold text-[#007AFF] flex items-center gap-1">
+            <i data-lucide="folder-plus" class="w-4 h-4"></i> Nuova cartella
+          </button>
+        </div>
+        <div id="folders-list" class="bg-white rounded-2xl overflow-hidden shadow-xs divide-y divide-gray-200"></div>
+      </section>
+
+      <!-- TAB 3: CERCA -->
+      <section id="tab-search" class="hidden space-y-4">
+        <div class="relative">
+          <i data-lucide="search" class="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2"></i>
+          <input id="search-input" type="search" oninput="renderSearchResults()" placeholder="Cerca per titolo o testo riconosciuto (OCR)..." class="w-full bg-[#E3E3E8] text-black placeholder-gray-500 rounded-xl pl-10 pr-4 py-2.5 text-[15px] focus:outline-none focus:ring-2 focus:ring-[#007AFF]/40" />
+        </div>
+        <div id="search-results" class="space-y-2.5"></div>
+      </section>
+
+      <!-- TAB 4: IMPOSTAZIONI -->
+      <section id="tab-settings" class="hidden space-y-5">
+        <div class="bg-white rounded-2xl overflow-hidden shadow-xs divide-y divide-gray-200">
+          <div class="p-4 flex items-center justify-between">
+            <div>
+              <p class="font-medium text-[15px]">Formato PDF predefinito</p>
+              <p class="text-xs text-gray-500">Dimensione pagina in esportazione</p>
+            </div>
+            <select id="setting-pdf-size" onchange="saveSettings()" class="bg-gray-100 text-[#007AFF] font-medium text-sm rounded-lg px-2.5 py-1.5 outline-none">
+              <option value="a4">A4 (Standard)</option>
+              <option value="letter">US Letter</option>
+              <option value="fit">Adatta all'immagine</option>
+            </select>
+          </div>
+          <div class="p-4 flex items-center justify-between">
+            <div>
+              <p class="font-medium text-[15px]">Filtro automatico scansione</p>
+              <p class="text-xs text-gray-500">Profilo applicato ai nuovi scatti</p>
+            </div>
+            <select id="setting-default-filter" onchange="saveSettings()" class="bg-gray-100 text-[#007AFF] font-medium text-sm rounded-lg px-2.5 py-1.5 outline-none">
+              <option value="document">Documento (Consigliato)</option>
+              <option value="bw">Bianco e Nero</option>
+              <option value="photo">Foto / Colore</option>
+              <option value="original">Originale</option>
+            </select>
+          </div>
+          <div class="p-4 flex items-center justify-between">
+            <div>
+              <p class="font-medium text-[15px]">Lingua OCR</p>
+              <p class="text-xs text-gray-500">Riconoscimento testo offline</p>
+            </div>
+            <select id="setting-ocr-lang" onchange="saveSettings()" class="bg-gray-100 text-[#007AFF] font-medium text-sm rounded-lg px-2.5 py-1.5 outline-none">
+              <option value="ita">Italiano</option>
+              <option value="eng">Inglese</option>
+              <option value="ita+eng">Italiano + Inglese</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-2xl overflow-hidden shadow-xs divide-y divide-gray-200">
+          <button onclick="exportBackupJSON()" class="w-full p-4 flex items-center justify-between text-left active:bg-gray-50">
+            <span class="text-[#007AFF] font-medium text-[15px]">Esporta backup archivio (.json)</span>
+            <i data-lucide="download" class="w-4 h-4 text-gray-400"></i>
+          </button>
+          <button onclick="clearAllStorage()" class="w-full p-4 flex items-center justify-between text-left active:bg-gray-50">
+            <span class="text-red-500 font-medium text-[15px]">Elimina tutti i documenti</span>
+            <i data-lucide="trash-2" class="w-4 h-4 text-red-400"></i>
+          </button>
+        </div>
+
+        <p class="text-center text-xs text-gray-400 pt-2">
+          My Scans Web PWA • Elaborazione 100% locale nel browser
+        </p>
+      </section>
+    </main>
+
+    <!-- TAB BAR INFERIORE CON PULSANTE CENTRALE MY SCANS -->
+    <nav class="fixed bottom-0 inset-x-0 z-30 ios-blur border-t border-gray-300/80 pb-safe">
+      <div class="max-w-3xl mx-auto h-16 px-2 grid grid-cols-5 items-center relative">
+        <button onclick="switchTab('documents')" class="nav-tab flex flex-col items-center justify-center gap-0.5 text-[#007AFF]" data-tab="documents">
+          <i data-lucide="files" class="w-6 h-6"></i>
+          <span class="text-[10px] font-medium">Documenti</span>
+        </button>
+        <button onclick="switchTab('folders')" class="nav-tab flex flex-col items-center justify-center gap-0.5 text-gray-400" data-tab="folders">
+          <i data-lucide="folder" class="w-6 h-6"></i>
+          <span class="text-[10px] font-medium">Cartelle</span>
+        </button>
+
+        <!-- Pulsante Centrale Flottante -->
+        <div class="flex items-center justify-center">
+          <button onclick="openScanActionSheet()" class="-mt-6 w-15 h-15 rounded-full bg-gradient-to-b from-[#34C759] to-[#28A745] text-white shadow-lg shadow-green-500/35 flex items-center justify-center active:scale-95 transition-transform border-4 border-[#F2F2F7]" style="width:60px;height:60px;" title="Nuova Scansione">
+            <i data-lucide="camera" class="w-7 h-7"></i>
+          </button>
+        </div>
+
+        <button onclick="switchTab('search')" class="nav-tab flex flex-col items-center justify-center gap-0.5 text-gray-400" data-tab="search">
+          <i data-lucide="search" class="w-6 h-6"></i>
+          <span class="text-[10px] font-medium">Cerca</span>
+        </button>
+        <button onclick="switchTab('settings')" class="nav-tab flex flex-col items-center justify-center gap-0.5 text-gray-400" data-tab="settings">
+          <i data-lucide="settings" class="w-6 h-6"></i>
+          <span class="text-[10px] font-medium">Impostazioni</span>
+        </button>
+      </div>
+    </nav>
+  </div>
+
+  <!-- Input file nascosti -->
+  <input id="input-gallery" type="file" accept="image/*" multiple class="hidden" onchange="handleFilesSelected(event)" />
+  <input id="input-native-cam" type="file" accept="image/*" capture="environment" class="hidden" onchange="handleFilesSelected(event)" />
+
+  <!-- ==================== ACTION SHEET SCANSIONE (STILE iOS) ==================== -->
+  <div id="scan-action-sheet" class="hidden fixed inset-0 z-50 bg-black/40 flex flex-col justify-end p-3 pb-safe animate-fade-in" onclick="if(event.target===this) closeScanActionSheet()">
+    <div class="max-w-md w-full mx-auto space-y-2 animate-slide-up">
+      <div class="bg-white/95 backdrop-blur-xl rounded-2xl overflow-hidden divide-y divide-gray-200 text-center">
+        <div class="py-2.5 px-4 text-xs font-medium text-gray-500">Nuova Scansione</div>
+        <button onclick="closeScanActionSheet(); openLiveCamera();" class="w-full py-3.5 text-[18px] text-[#007AFF] font-normal active:bg-gray-100 flex items-center justify-center gap-2">
+          <i data-lucide="camera" class="w-5 h-5"></i> Scatta con Fotocamera Live
+        </button>
+        <button onclick="closeScanActionSheet(); document.getElementById('input-native-cam').click();" class="w-full py-3.5 text-[18px] text-[#007AFF] font-normal active:bg-gray-100 flex items-center justify-center gap-2">
+          <i data-lucide="smartphone" class="w-5 h-5"></i> Fotocamera Sistema (HD)
+        </button>
+        <button onclick="closeScanActionSheet(); document.getElementById('input-gallery').click();" class="w-full py-3.5 text-[18px] text-[#007AFF] font-normal active:bg-gray-100 flex items-center justify-center gap-2">
+          <i data-lucide="images" class="w-5 h-5"></i> Importa da Libreria Foto
+        </button>
+      </div>
+      <button onclick="closeScanActionSheet()" class="w-full py-3.5 bg-white rounded-2xl text-[18px] font-semibold text-[#007AFF] active:bg-gray-100">
+        Annulla
+      </button>
+    </div>
+  </div>
+
+  <!-- ==================== FOTOCAMERA LIVE BATCH (STILE MY SCANS) ==================== -->
+  <div id="camera-modal" class="hidden fixed inset-0 z-50 bg-black text-white flex flex-col pt-safe pb-safe">
+    <!-- Top bar fotocamera -->
+    <div class="flex items-center justify-between px-4 py-3 z-10">
+      <button onclick="closeLiveCamera()" class="text-white text-[17px] font-normal px-2 py-1">Annulla</button>
+      <div class="flex items-center gap-4">
+        <button id="btn-torch" onclick="toggleTorch()" class="p-2 rounded-full bg-white/10 text-white" title="Flash">
+          <i data-lucide="zap-off" class="w-5 h-5"></i>
+        </button>
+        <button id="btn-grid-toggle" onclick="toggleCameraGrid()" class="p-2 rounded-full bg-white/20 text-yellow-400" title="Griglia">
+          <i data-lucide="grid-3x3" class="w-5 h-5"></i>
+        </button>
+        <button onclick="switchCameraFacing()" class="p-2 rounded-full bg-white/10 text-white" title="Cambia fotocamera">
+          <i data-lucide="refresh-cw" class="w-5 h-5"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- Viewfinder -->
+    <div class="relative flex-1 flex items-center justify-center overflow-hidden bg-black">
+      <video id="camera-video" autoplay playsinline class="w-full h-full object-cover"></video>
+      
+      <!-- Griglia dei terzi & cornice guida A4 -->
+      <div id="camera-grid-overlay" class="absolute inset-0 pointer-events-none">
+        <div class="w-full h-full grid grid-cols-3 grid-rows-3">
+          <div class="border-r border-b border-white/25"></div>
+          <div class="border-r border-b border-white/25"></div>
+          <div class="border-b border-white/25"></div>
+          <div class="border-r border-b border-white/25"></div>
+          <div class="border-r border-b border-white/25"></div>
+          <div class="border-b border-white/25"></div>
+          <div class="border-r border-white/25"></div>
+          <div class="border-r border-white/25"></div>
+          <div></div>
+        </div>
+        <div class="absolute inset-x-8 inset-y-12 border-2 border-[#007AFF]/70 rounded-lg pointer-events-none flex items-end justify-center pb-2">
+          <span class="bg-black/60 text-white/90 text-[11px] px-2.5 py-0.5 rounded-full">Inquadra il documento</span>
+        </div>
+      </div>
+
+      <!-- Flash effetto scatto -->
+      <div id="shutter-flash" class="hidden absolute inset-0 bg-white pointer-events-none"></div>
+    </div>
+
+    <!-- Controlli inferiori fotocamera (Modalità Batch) -->
+    <div class="px-6 py-5 bg-black flex items-center justify-between">
+      <button onclick="closeLiveCamera(); document.getElementById('input-gallery').click();" class="w-12 h-12 rounded-xl bg-white/15 flex items-center justify-center">
+        <i data-lucide="image" class="w-6 h-6 text-white"></i>
+      </button>
+
+      <!-- Pulsante otturatore stile iOS -->
+      <button onclick="captureCameraFrame()" class="w-18 h-18 rounded-full border-4 border-white p-1 flex items-center justify-center active:scale-90 transition-transform" style="width:72px;height:72px;">
+        <div class="w-full h-full rounded-full bg-white"></div>
+      </button>
+
+      <!-- Miniatura Batch + Fine -->
+      <div class="w-16 flex justify-end">
+        <button id="btn-batch-done" onclick="finishBatchCapture()" class="hidden relative flex items-center gap-1.5 bg-[#007AFF] text-white pl-2 pr-3 py-1.5 rounded-full font-semibold text-sm shadow-lg">
+          <img id="batch-thumb" src="" class="w-7 h-7 rounded-md object-cover border border-white/40" />
+          <span id="batch-count">1</span>
+          <i data-lucide="chevron-right" class="w-4 h-4"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== RITAGLIO PROSPETTICO (STILE MY SCANS) ==================== -->
+  <div id="crop-modal" class="hidden fixed inset-0 z-50 bg-[#1C1C1E] text-white flex flex-col pt-safe pb-safe">
+    <div class="flex items-center justify-between px-4 py-3 border-b border-white/10">
+      <button onclick="closeCropModal()" class="text-gray-300 text-[17px]">Annulla</button>
+      <span id="crop-title" class="font-semibold text-[17px]">Ritaglia Bordi</span>
+      <button onclick="applyPerspectiveCrop()" class="text-[#007AFF] font-semibold text-[17px]">Fine</button>
+    </div>
+
+    <!-- Area Canvas Ritaglio -->
+    <div id="crop-stage" class="relative flex-1 flex items-center justify-center overflow-hidden p-4 touch-none">
+      <canvas id="crop-canvas" class="max-w-full max-h-full shadow-2xl"></canvas>
+      <svg id="crop-overlay-svg" class="absolute pointer-events-none"></svg>
+      
+      <!-- Lente d'ingrandimento -->
+      <div id="magnifier" class="hidden fixed w-28 h-28 rounded-full border-2 border-[#007AFF] shadow-2xl overflow-hidden pointer-events-none z-40 bg-black">
+        <canvas id="magnifier-canvas" width="112" height="112"></canvas>
+        <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div class="w-4 h-0.5 bg-[#007AFF]"></div>
+          <div class="h-4 w-0.5 bg-[#007AFF] absolute"></div>
+        </div>
+      </div>
+
+      <!-- 4 Maniglie angolari -->
+      <div id="handle-0" class="crop-handle" data-idx="0"></div>
+      <div id="handle-1" class="crop-handle" data-idx="1"></div>
+      <div id="handle-2" class="crop-handle" data-idx="2"></div>
+      <div id="handle-3" class="crop-handle" data-idx="3"></div>
+    </div>
+
+    <!-- Toolbar inferiore Ritaglio -->
+    <div class="px-4 py-3 bg-[#2C2C2E] flex items-center justify-around border-t border-white/10">
+      <button onclick="autoDetectDocumentEdges()" class="flex flex-col items-center gap-1 text-xs text-gray-200 active:text-[#007AFF]">
+        <i data-lucide="scan" class="w-5 h-5 text-[#007AFF]"></i>
+        <span>Auto-Bordi</span>
+      </button>
+      <button onclick="resetFullFrameCrop()" class="flex flex-col items-center gap-1 text-xs text-gray-200 active:text-[#007AFF]">
+        <i data-lucide="maximize" class="w-5 h-5 text-[#007AFF]"></i>
+        <span>Intera Pagina</span>
+      </button>
+      <button onclick="rotateCropSource(-90)" class="flex flex-col items-center gap-1 text-xs text-gray-200 active:text-[#007AFF]">
+        <i data-lucide="rotate-ccw" class="w-5 h-5 text-[#007AFF]"></i>
+        <span>Ruota Sx</span>
+      </button>
+      <button onclick="rotateCropSource(90)" class="flex flex-col items-center gap-1 text-xs text-gray-200 active:text-[#007AFF]">
+        <i data-lucide="rotate-cw" class="w-5 h-5 text-[#007AFF]"></i>
+        <span>Ruota Dx</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ==================== VISUALIZZATORE & EDITOR DOCUMENTO ==================== -->
+  <div id="viewer-modal" class="hidden fixed inset-0 z-40 bg-[#F2F2F7] flex flex-col pt-safe pb-safe">
+    <!-- Top Bar iOS -->
+    <header class="ios-blur border-b border-gray-300/80 px-3 py-2.5 flex items-center justify-between">
+      <button onclick="closeViewerModal()" class="flex items-center text-[#007AFF] text-[17px] font-normal">
+        <i data-lucide="chevron-left" class="w-6 h-6 -ml-1"></i>
+        <span>Documenti</span>
+      </button>
+
+      <div class="flex flex-col items-center max-w-[50%]">
+        <button onclick="renameCurrentDocument()" class="font-semibold text-[16px] truncate max-w-full flex items-center gap-1">
+          <span id="viewer-doc-title">Documento</span>
+          <i data-lucide="pencil" class="w-3 h-3 text-gray-400 shrink-0"></i>
+        </button>
+        <span id="viewer-page-indicator" class="text-[11px] text-gray-500">Pagina 1 di 1</span>
+      </div>
+
+      <button onclick="openExportShareSheet()" class="text-[#007AFF] p-1.5" title="Condividi / Esporta">
+        <i data-lucide="share" class="w-5 h-5"></i>
+      </button>
+    </header>
+
+    <!-- Area Centrale Pagina -->
+    <div id="viewer-canvas-wrapper" class="relative flex-1 flex items-center justify-center overflow-hidden p-4 bg-[#E5E5EA]">
+      <div id="page-container" class="relative shadow-xl bg-white flex items-center justify-center max-w-full max-h-full">
+        <img id="viewer-page-img" src="" class="max-w-full max-h-[64vh] object-contain block pointer-events-none" />
+        <!-- Layer annotazioni (Firme e Testi sovrapposti) -->
+        <div id="annotations-layer" class="absolute inset-0 overflow-hidden"></div>
+      </div>
+
+      <!-- Frecce navigazione pagine -->
+      <button id="btn-prev-page" onclick="changeViewerPage(-1)" class="hidden absolute left-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/40 text-white flex items-center justify-center">
+        <i data-lucide="chevron-left" class="w-5 h-5"></i>
+      </button>
+      <button id="btn-next-page" onclick="changeViewerPage(1)" class="hidden absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/40 text-white flex items-center justify-center">
+        <i data-lucide="chevron-right" class="w-5 h-5"></i>
+      </button>
+    </div>
+
+    <!-- Pannello contestuale Filtri / Regolazioni (a scomparsa) -->
+    <div id="filter-drawer" class="hidden bg-white border-t border-gray-200 px-4 py-3 space-y-3">
+      <div class="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+        <button onclick="setPageFilter('original')" class="filter-chip px-3.5 py-1.5 rounded-full text-xs font-semibold border" data-filter="original">Originale</button>
+        <button onclick="setPageFilter('photo')" class="filter-chip px-3.5 py-1.5 rounded-full text-xs font-semibold border" data-filter="photo">Foto</button>
+        <button onclick="setPageFilter('document')" class="filter-chip px-3.5 py-1.5 rounded-full text-xs font-semibold border" data-filter="document">Documento</button>
+        <button onclick="setPageFilter('bw')" class="filter-chip px-3.5 py-1.5 rounded-full text-xs font-semibold border" data-filter="bw">B/N</button>
+        <button onclick="setPageFilter('whiteboard')" class="filter-chip px-3.5 py-1.5 rounded-full text-xs font-semibold border" data-filter="whiteboard">Lavagna</button>
+      </div>
+      <div class="grid grid-cols-2 gap-4 text-xs text-gray-600">
+        <div>
+          <div class="flex justify-between mb-1"><span>Luminosità</span><span id="val-brightness">0</span></div>
+          <input id="slider-brightness" type="range" min="-60" max="60" value="0" oninput="onAdjustmentChange()" class="w-full" />
+        </div>
+        <div>
+          <div class="flex justify-between mb-1"><span>Contrasto</span><span id="val-contrast">0</span></div>
+          <input id="slider-contrast" type="range" min="-60" max="80" value="0" oninput="onAdjustmentChange()" class="w-full" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Strip miniature multi-pagina -->
+    <div id="page-thumbnails-strip" class="bg-white/90 border-t border-gray-200 px-3 py-2 flex items-center gap-2 overflow-x-auto no-scrollbar">
+      <!-- Popolato via JS -->
+    </div>
+
+    <!-- Toolbar inferiore Editor stile My Scans -->
+    <div class="ios-blur border-t border-gray-300 px-2 py-2 grid grid-cols-6 gap-1 text-center">
+      <button onclick="addMorePagesToDoc()" class="flex flex-col items-center gap-0.5 text-[#007AFF] active:opacity-60">
+        <i data-lucide="plus-square" class="w-5 h-5"></i>
+        <span class="text-[10px]">Aggiungi</span>
+      </button>
+      <button onclick="reCropCurrentPage()" class="flex flex-col items-center gap-0.5 text-[#007AFF] active:opacity-60">
+        <i data-lucide="crop" class="w-5 h-5"></i>
+        <span class="text-[10px]">Ritaglia</span>
+      </button>
+      <button onclick="toggleFilterDrawer()" id="btn-toggle-filters" class="flex flex-col items-center gap-0.5 text-[#007AFF] active:opacity-60">
+        <i data-lucide="sliders-horizontal" class="w-5 h-5"></i>
+        <span class="text-[10px]">Filtri</span>
+      </button>
+      <button onclick="openSignatureModal()" class="flex flex-col items-center gap-0.5 text-[#007AFF] active:opacity-60">
+        <i data-lucide="pen-tool" class="w-5 h-5"></i>
+        <span class="text-[10px]">Firma</span>
+      </button>
+      <button onclick="addTextAnnotationPrompt()" class="flex flex-col items-center gap-0.5 text-[#007AFF] active:opacity-60">
+        <i data-lucide="type" class="w-5 h-5"></i>
+        <span class="text-[10px]">Testo</span>
+      </button>
+      <button onclick="runOCRCurrentDocument()" class="flex flex-col items-center gap-0.5 text-[#007AFF] active:opacity-60">
+        <i data-lucide="file-text" class="w-5 h-5"></i>
+        <span class="text-[10px]">OCR</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ==================== MODALE FIRMA DIGITALE ==================== -->
+  <div id="signature-modal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-3">
+    <div class="bg-white w-full max-w-lg rounded-2xl overflow-hidden shadow-2xl animate-slide-up">
+      <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+        <button onclick="closeSignatureModal()" class="text-gray-500 text-[16px]">Annulla</button>
+        <span class="font-semibold text-[16px]">Disegna Firma</span>
+        <button onclick="confirmSignature()" class="text-[#007AFF] font-semibold text-[16px]">Inserisci</button>
+      </div>
+      <div class="p-4 bg-gray-50">
+        <div class="bg-white border-2 border-dashed border-gray-300 rounded-xl overflow-hidden relative">
+          <canvas id="signature-pad" width="460" height="200" class="w-full h-48 touch-none block"></canvas>
+          <div class="absolute bottom-3 inset-x-6 border-b border-gray-200 pointer-events-none"></div>
+        </div>
+        <div class="flex items-center justify-between mt-3">
+          <div class="flex items-center gap-2.5">
+            <button onclick="setSigColor('#000000')" class="w-7 h-7 rounded-full bg-black ring-2 ring-offset-2 ring-gray-400 sig-color-btn"></button>
+            <button onclick="setSigColor('#0055D4')" class="w-7 h-7 rounded-full bg-[#0055D4] sig-color-btn"></button>
+            <button onclick="setSigColor('#D92D20')" class="w-7 h-7 rounded-full bg-[#D92D20] sig-color-btn"></button>
+          </div>
+          <button onclick="clearSignaturePad()" class="text-sm text-red-500 font-medium">Cancella</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== MODALE RISULTATO OCR ==================== -->
+  <div id="ocr-modal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-3">
+    <div class="bg-white w-full max-w-lg rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[82vh] animate-slide-up">
+      <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+        <button onclick="closeOCRModal()" class="text-gray-500 text-[16px]">Chiudi</button>
+        <span class="font-semibold text-[16px]">Testo Riconosciuto (OCR)</span>
+        <button onclick="copyOCRText()" class="text-[#007AFF] font-semibold text-[16px]">Copia</button>
+      </div>
+      <div id="ocr-loading" class="p-8 text-center space-y-3">
+        <div class="w-10 h-10 border-4 border-[#007AFF] border-t-transparent rounded-full animate-spin mx-auto"></div>
+        <p id="ocr-status-text" class="text-sm font-medium text-gray-700">Inizializzazione motore OCR...</p>
+      </div>
+      <div id="ocr-result-box" class="hidden p-4 flex-1 flex flex-col gap-3 overflow-hidden">
+        <textarea id="ocr-textarea" class="selectable-text w-full flex-1 min-h-[220px] p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm leading-relaxed focus:outline-none focus:border-[#007AFF]"></textarea>
+        <div class="flex gap-2">
+          <button onclick="saveEditedOCRText()" class="flex-1 py-2.5 bg-[#007AFF] text-white rounded-xl font-semibold text-sm">Salva modifiche</button>
+          <button onclick="downloadOCRAsTxt()" class="px-4 py-2.5 bg-gray-100 text-gray-800 rounded-xl font-semibold text-sm">Scarica .TXT</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== EXPORT / SHARE SHEET (STILE MY SCANS) ==================== -->
+  <div id="export-sheet" class="hidden fixed inset-0 z-50 bg-black/40 flex flex-col justify-end p-3 pb-safe animate-fade-in" onclick="if(event.target===this) closeExportShareSheet()">
+    <div class="max-w-md w-full mx-auto space-y-2 animate-slide-up">
+      <div class="bg-white/95 backdrop-blur-xl rounded-2xl overflow-hidden divide-y divide-gray-200 text-center">
+        <div class="py-2.5 px-4 text-xs font-medium text-gray-500">Esporta e Condividi Documento</div>
+        <button onclick="exportCurrentDocPDF('share')" class="w-full py-3.5 text-[17px] text-[#007AFF] font-semibold active:bg-gray-100 flex items-center justify-center gap-2">
+          <i data-lucide="share-2" class="w-5 h-5"></i> Condividi PDF (Mail, WhatsApp, Drive...)
+        </button>
+        <button onclick="exportCurrentDocPDF('download')" class="w-full py-3.5 text-[17px] text-[#007AFF] active:bg-gray-100 flex items-center justify-center gap-2">
+          <i data-lucide="file-down" class="w-5 h-5"></i> Scarica file PDF
+        </button>
+        <button onclick="exportCurrentPageJPEG()" class="w-full py-3.5 text-[17px] text-[#007AFF] active:bg-gray-100 flex items-center justify-center gap-2">
+          <i data-lucide="image" class="w-5 h-5"></i> Salva pagina corrente come JPEG
+        </button>
+        <button onclick="moveDocToFolderPrompt()" class="w-full py-3.5 text-[17px] text-[#007AFF] active:bg-gray-100 flex items-center justify-center gap-2">
+          <i data-lucide="folder-input" class="w-5 h-5"></i> Sposta in una cartella
+        </button>
+        <button onclick="deleteCurrentDocument()" class="w-full py-3.5 text-[17px] text-red-500 active:bg-gray-100 flex items-center justify-center gap-2">
+          <i data-lucide="trash-2" class="w-5 h-5"></i> Elimina documento
+        </button>
+      </div>
+      <button onclick="closeExportShareSheet()" class="w-full py-3.5 bg-white rounded-2xl text-[17px] font-semibold text-[#007AFF] active:bg-gray-100">
+        Annulla
+      </button>
+    </div>
+  </div>
+
+  <!-- Toast Notifica iOS -->
+  <div id="ios-toast" class="hidden fixed top-14 left-1/2 -translate-x-1/2 z-50 bg-black/80 text-white text-xs font-medium px-4 py-2 rounded-full shadow-lg pointer-events-none"></div>
+
+  <script>
+    /* =========================================================================
+       1. PWA SETUP (MANIFEST & SERVICE WORKER INLINE PER GITHUB PAGES)
+       ========================================================================= */
+    (function setupPWA() {
+      const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#2DA8FF"/><stop offset="100%" stop-color="#007AFF"/></linearGradient></defs><rect width="512" height="512" rx="112" fill="url(#g)"/><rect x="126" y="96" width="260" height="320" rx="28" fill="#fff"/><path d="M170 175h172M170 235h172M170 295h110" stroke="#007AFF" stroke-width="24" stroke-linecap="round"/><rect x="90" y="246" width="332" height="16" rx="8" fill="#34C759"/></svg>`;
+      const iconUrl = 'data:image/svg+xml;base64,' + btoa(svgIcon);
+      document.getElementById('apple-icon').href = iconUrl;
+
+      const manifest = {
+        name: "My Scans — Scanner PDF & OCR",
+        short_name: "My Scans",
+        start_url: "./",
+        display: "standalone",
+        background_color: "#F2F2F7",
+        theme_color: "#F2F2F7",
+        icons: [{ src: iconUrl, sizes: "512x512", type: "image/svg+xml", purpose: "any maskable" }]
+      };
+      const manifestBlob = new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' });
+      document.getElementById('pwa-manifest').href = URL.createObjectURL(manifestBlob);
+
+      if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+        const swCode = `
+          const CACHE = 'myscans-pwa-v1';
+          self.addEventListener('install', e => self.skipWaiting());
+          self.addEventListener('activate', e => e.waitUntil(clients.claim()));
+          self.addEventListener('fetch', e => {
+            if (e.request.method !== 'GET') return;
+            e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
+          });
+        `;
+        const swBlob = new Blob([swCode], { type: 'application/javascript' });
+        navigator.serviceWorker.register(URL.createObjectURL(swBlob)).catch(() => {});
+      }
+    })();
+
+    /* =========================================================================
+       2. DATABASE LOCALE INDEXEDDB
+       ========================================================================= */
+    const DB_NAME = 'MyScansCloneDB';
+    const DB_VERSION = 1;
+    let db = null;
+
+    function initDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        req.onupgradeneeded = (e) => {
+          const database = e.target.result;
+          if (!database.objectStoreNames.contains('documents')) {
+            database.createObjectStore('documents', { keyPath: 'id' });
+          }
+          if (!database.objectStoreNames.contains('folders')) {
+            database.createObjectStore('folders', { keyPath: 'id' });
+          }
+        };
+        req.onsuccess = (e) => { db = e.target.result; resolve(db); };
+        req.onerror = (e) => reject(e.target.error);
+      });
+    }
+
+    function dbGetAll(storeName) {
+      return new Promise((resolve) => {
+        const tx = db.transaction(storeName, 'readonly');
+        const req = tx.objectStore(storeName).getAll();
+        req.onsuccess = () => resolve(req.result || []);
+      });
+    }
+
+    function dbPut(storeName, item) {
+      return new Promise((resolve) => {
+        const tx = db.transaction(storeName, 'readwrite');
+        tx.objectStore(storeName).put(item);
+        tx.oncomplete = () => resolve();
+      });
+    }
+
+    function dbDelete(storeName, id) {
+      return new Promise((resolve) => {
+        const tx = db.transaction(storeName, 'readwrite');
+        tx.objectStore(storeName).delete(id);
+        tx.oncomplete = () => resolve();
+      });
+    }
+
+    /* =========================================================================
+       3. STATO GLOBALE APPLICAZIONE
+       ========================================================================= */
+    let documents = [];
+    let folders = [
+      { id: 'receipts', name: 'Ricevute e Fatture', icon: 'receipt' },
+      { id: 'contracts', name: 'Contratti e ID', icon: 'file-check' },
+      { id: 'notes', name: 'Appunti e Lavagne', icon: 'notebook-pen' }
+    ];
+    let settings = JSON.parse(localStorage.getItem('myscans_settings') || '{"pdfSize":"a4","defaultFilter":"document","ocrLang":"ita"}');
+
+    let currentTab = 'documents';
+    let currentFolderFilter = 'all';
+    let viewMode = 'grid'; // 'grid' | 'list'
+    let sortMode = 'date-desc';
+    let selectMode = false;
+    let selectedDocIds = new Set();
+
+    // Stato Fotocamera & Batch
+    let cameraStream = null;
+    let facingMode = 'environment';
+    let torchOn = false;
+    let batchQueue = []; // array di dataURLs
+
+    // Stato Ritaglio Prospettico
+    let cropQueue = []; // { rawDataUrl, targetDocId, targetPageIdx }
+    let currentCropItem = null;
+    let cropImg = new Image();
+    let cropCorners = []; // [{x,y} x4] in coordinate immagine naturale
+    let activeHandleIdx = -1;
+
+    // Stato Visualizzatore Documento
+    let activeDocId = null;
+    let activePageIdx = 0;
+    let appendingToActiveDoc = false;
+
+    /* =========================================================================
+       4. INIZIALIZZAZIONE & NAVIGAZIONE
+       ========================================================================= */
+    window.addEventListener('DOMContentLoaded', async () => {
+      lucide.createIcons();
+      await initDB();
+      
+      const savedFolders = await dbGetAll('folders');
+      if (savedFolders.length > 0) {
+        folders = savedFolders;
+      } else {
+        for (const f of folders) await dbPut('folders', f);
+      }
+
+      documents = await dbGetAll('documents');
+      loadSettingsUI();
+      renderDocuments();
+      renderFolders();
+    });
+
+    function showToast(msg) {
+      const t = document.getElementById('ios-toast');
+      t.textContent = msg;
+      t.classList.remove('hidden');
+      clearTimeout(t._timer);
+      t._timer = setTimeout(() => t.classList.add('hidden'), 2400);
+    }
+
+    function switchTab(tab) {
+      currentTab = tab;
+      ['documents', 'folders', 'search', 'settings'].forEach(t => {
+        document.getElementById('tab-' + t).classList.toggle('hidden', t !== tab);
+      });
+      document.querySelectorAll('.nav-tab').forEach(btn => {
+        const isCurrent = btn.dataset.tab === tab;
+        btn.classList.toggle('text-[#007AFF]', isCurrent);
+        btn.classList.toggle('text-gray-400', !isCurrent);
+      });
+
+      const titles = { documents: 'Documenti', folders: 'Cartelle', search: 'Cerca', settings: 'Impostazioni' };
+      document.getElementById('header-title').textContent = titles[tab];
+      if (tab === 'documents') renderDocuments();
+      if (tab === 'folders') renderFolders();
+      if (tab === 'search') {
+        renderSearchResults();
+        setTimeout(() => document.getElementById('search-input').focus(), 100);
+      }
+    }
+
+    /* =========================================================================
+       5. RENDERING ARCHIVIO DOCUMENTI & CARTELLE
+       ========================================================================= */
+    function renderDocuments() {
+      const container = document.getElementById('documents-container');
+      const empty = document.getElementById('empty-state');
+      const folderBanner = document.getElementById('active-folder-banner');
+
+      let filtered = [...documents];
+      if (currentFolderFilter !== 'all') {
+        filtered = filtered.filter(d => d.folderId === currentFolderFilter);
+        const fObj = folders.find(f => f.id === currentFolderFilter);
+        document.getElementById('active-folder-name').textContent = fObj ? fObj.name : 'Cartella';
+        folderBanner.classList.remove('hidden');
+      } else {
+        folderBanner.classList.add('hidden');
+      }
+
+      filtered.sort((a, b) => {
+        if (sortMode === 'date-desc') return b.updatedAt - a.updatedAt;
+        if (sortMode === 'date-asc') return a.updatedAt - b.updatedAt;
+        return a.title.localeCompare(b.title);
+      });
+
+      document.getElementById('doc-counter').textContent = `${filtered.length} ${filtered.length === 1 ? 'documento' : 'documenti'}`;
+
+      if (filtered.length === 0) {
+        container.innerHTML = '';
+        empty.classList.remove('hidden');
+        return;
+      }
+      empty.classList.add('hidden');
+
+      if (viewMode === 'grid') {
+        container.className = 'grid grid-cols-2 sm:grid-cols-3 gap-3.5';
+        container.innerHTML = filtered.map(doc => {
+          const thumb = doc.pages[0]?.processedUrl || doc.pages[0]?.croppedUrl || '';
+          const dateStr = new Date(doc.updatedAt).toLocaleDateString('it-IT', { day: '2-digit', month: 'short', year: 'numeric' });
+          const isSelected = selectedDocIds.has(doc.id);
+          return `
+            <div onclick="handleDocCardClick('${doc.id}')" class="bg-white rounded-2xl p-2.5 shadow-xs border ${isSelected ? 'border-[#007AFF] ring-2 ring-[#007AFF]/30' : 'border-gray-200/70'} active:scale-[0.98] transition-transform cursor-pointer relative">
+              ${selectMode ? `
+                <div class="absolute top-4 right-4 z-10 w-6 h-6 rounded-full border-2 ${isSelected ? 'bg-[#007AFF] border-[#007AFF]' : 'bg-white/80 border-gray-400'} flex items-center justify-center">
+                  ${isSelected ? '<i data-lucide="check" class="w-3.5 h-3.5 text-white"></i>' : ''}
+                </div>
+              ` : ''}
+              <div class="aspect-[3/4] w-full bg-gray-100 rounded-xl overflow-hidden relative border border-gray-100">
+                <img src="${thumb}" class="w-full h-full object-cover" loading="lazy" />
+                <span class="absolute bottom-2 right-2 bg-black/70 text-white text-[11px] font-semibold px-2 py-0.5 rounded-md">
+                  ${doc.pages.length} ${doc.pages.length === 1 ? 'pag' : 'pagg'}
+                </span>
+              </div>
+              <div class="mt-2 px-0.5">
+                <p class="font-semibold text-[14px] text-gray-900 truncate">${escapeHtml(doc.title)}</p>
+                <p class="text-[11px] text-gray-500 mt-0.5">${dateStr}</p>
+              </div>
+            </div>
+          `;
+        }).join('');
+      } else {
+        container.className = 'bg-white rounded-2xl overflow-hidden shadow-xs divide-y divide-gray-200';
+        container.innerHTML = filtered.map(doc => {
+          const thumb = doc.pages[0]?.processedUrl || '';
+          const dateStr = new Date(doc.updatedAt).toLocaleDateString('it-IT', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+          const isSelected = selectedDocIds.has(doc.id);
+          return `
+            <div onclick="handleDocCardClick('${doc.id}')" class="p-3 flex items-center gap-3 active:bg-gray-50 cursor-pointer">
+              ${selectMode ? `
+                <div class="w-6 h-6 rounded-full border-2 shrink-0 ${isSelected ? 'bg-[#007AFF] border-[#007AFF]' : 'border-gray-300'} flex items-center justify-center">
+                  ${isSelected ? '<i data-lucide="check" class="w-3.5 h-3.5 text-white"></i>' : ''}
+                </div>
+              ` : ''}
+              <img src="${thumb}" class="w-12 h-16 rounded-lg object-cover border border-gray-200 shrink-0 bg-gray-100" />
+              <div class="flex-1 min-w-0">
+                <p class="font-semibold text-[15px] text-gray-900 truncate">${escapeHtml(doc.title)}</p>
+                <p class="text-xs text-gray-500 mt-0.5">${dateStr} • ${doc.pages.length} ${doc.pages.length === 1 ? 'pagina' : 'pagine'}</p>
+              </div>
+              <i data-lucide="chevron-right" class="w-4 h-4 text-gray-400 shrink-0"></i>
+            </div>
+          `;
+        }).join('');
+      }
+      lucide.createIcons();
+    }
+
+    function handleDocCardClick(docId) {
+      if (selectMode) {
+        if (selectedDocIds.has(docId)) selectedDocIds.delete(docId);
+        else selectedDocIds.add(docId);
+        document.getElementById('selected-count').textContent = `${selectedDocIds.size} selezionati`;
+        renderDocuments();
+        return;
+      }
+      openDocumentViewer(docId);
+    }
+
+    function toggleSelectMode() {
+      selectMode = !selectMode;
+      selectedDocIds.clear();
+      document.getElementById('btn-select-mode').textContent = selectMode ? 'Fine' : 'Seleziona';
+      document.getElementById('selection-bar').classList.toggle('hidden', !selectMode);
+      document.getElementById('selected-count').textContent = '0 selezionati';
+      renderDocuments();
+    }
+
+    function toggleViewMode() {
+      viewMode = viewMode === 'grid' ? 'list' : 'grid';
+      document.getElementById('btn-view-mode').innerHTML = `<i data-lucide="${viewMode === 'grid' ? 'list' : 'layout-grid'}" class="w-5 h-5"></i>`;
+      renderDocuments();
+    }
+
+    function openSortMenu() {
+      sortMode = sortMode === 'date-desc' ? 'title-asc' : (sortMode === 'title-asc' ? 'date-asc' : 'date-desc');
+      const labels = { 'date-desc': 'Più recenti', 'title-asc': 'Ordine alfabetico (A-Z)', 'date-asc': 'Meno recenti' };
+      showToast('Ordine: ' + labels[sortMode]);
+      renderDocuments();
+    }
+
+    function renderFolders() {
+      const list = document.getElementById('folders-list');
+      const allCount = documents.length;
+      let html = `
+        <div onclick="setFolderFilter('all')" class="p-4 flex items-center justify-between active:bg-gray-50 cursor-pointer">
+          <div class="flex items-center gap-3">
+            <div class="w-9 h-9 rounded-xl bg-blue-100 text-[#007AFF] flex items-center justify-center">
+              <i data-lucide="layers" class="w-5 h-5"></i>
+            </div>
+            <span class="font-medium text-[15px]">Tutti i documenti</span>
+          </div>
+          <div class="flex items-center gap-2 text-gray-400">
+            <span class="text-sm">${allCount}</span>
+            <i data-lucide="chevron-right" class="w-4 h-4"></i>
+          </div>
+        </div>
+      `;
+
+      html += folders.map(f => {
+        const count = documents.filter(d => d.folderId === f.id).length;
+        return `
+          <div onclick="setFolderFilter('${f.id}')" class="p-4 flex items-center justify-between active:bg-gray-50 cursor-pointer">
+            <div class="flex items-center gap-3">
+              <div class="w-9 h-9 rounded-xl bg-sky-100 text-[#007AFF] flex items-center justify-center">
+                <i data-lucide="${f.icon || 'folder'}" class="w-5 h-5"></i>
+              </div>
+              <span class="font-medium text-[15px]">${escapeHtml(f.name)}</span>
+            </div>
+            <div class="flex items-center gap-2 text-gray-400">
+              <span class="text-sm">${count}</span>
+              <i data-lucide="chevron-right" class="w-4 h-4"></i>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      list.innerHTML = html;
+      lucide.createIcons();
+    }
+
+    function setFolderFilter(folderId) {
+      currentFolderFilter = folderId;
+      switchTab('documents');
+    }
+
+    async function createNewFolder() {
+      const name = prompt('Nome della nuova cartella:');
+      if (!name || !name.trim()) return;
+      const folder = { id: 'fld_' + Date.now(), name: name.trim(), icon: 'folder' };
+      folders.push(folder);
+      await dbPut('folders', folder);
+      renderFolders();
+      showToast('Cartella creata');
+    }
+
+    function renderSearchResults() {
+      const q = document.getElementById('search-input').value.trim().toLowerCase();
+      const box = document.getElementById('search-results');
+      if (!q) {
+        box.innerHTML = `<p class="text-center text-sm text-gray-400 py-10">Digita una parola chiave per cercare nei titoli o nel testo OCR dei documenti.</p>`;
+        return;
+      }
+      const matches = documents.filter(d =>
+        d.title.toLowerCase().includes(q) || (d.ocrText && d.ocrText.toLowerCase().includes(q))
+      );
+      if (matches.length === 0) {
+        box.innerHTML = `<p class="text-center text-sm text-gray-400 py-10">Nessun risultato per "${escapeHtml(q)}"</p>`;
+        return;
+      }
+      box.innerHTML = matches.map(doc => `
+        <div onclick="openDocumentViewer('${doc.id}')" class="bg-white p-3 rounded-xl shadow-xs flex items-center gap-3 cursor-pointer">
+          <img src="${doc.pages[0]?.processedUrl || ''}" class="w-11 h-14 rounded-lg object-cover border border-gray-200" />
+          <div class="flex-1 min-w-0">
+            <p class="font-semibold text-sm text-gray-900 truncate">${escapeHtml(doc.title)}</p>
+            <p class="text-xs text-gray-500 line-clamp-2 mt-0.5">${escapeHtml(doc.ocrText || 'Nessun testo OCR estratto')}</p>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    /* =========================================================================
+       6. ACQUISIZIONE FOTOCAMERA LIVE & GALLERIA
+       ========================================================================= */
+    function openScanActionSheet() {
+      appendingToActiveDoc = false;
+      document.getElementById('scan-action-sheet').classList.remove('hidden');
+    }
+    function closeScanActionSheet() {
+      document.getElementById('scan-action-sheet').classList.add('hidden');
+    }
+
+    async function openLiveCamera() {
+      batchQueue = [];
+      updateBatchUI();
+      document.getElementById('camera-modal').classList.remove('hidden');
+      await startCameraStream();
+    }
+
+    async function startCameraStream() {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(t => t.stop());
+      }
+      try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: facingMode }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+          audio: false
+        });
+        const video = document.getElementById('camera-video');
+        video.srcObject = cameraStream;
+      } catch (err) {
+        closeLiveCamera();
+        showToast('Fotocamera live non disponibile: uso fotocamera sistema');
+        document.getElementById('input-native-cam').click();
+      }
+    }
+
+    function closeLiveCamera() {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(t => t.stop());
+        cameraStream = null;
+      }
+      torchOn = false;
+      document.getElementById('camera-modal').classList.add('hidden');
+    }
+
+    async function switchCameraFacing() {
+      facingMode = facingMode === 'environment' ? 'user' : 'environment';
+      await startCameraStream();
+    }
+
+    async function toggleTorch() {
+      if (!cameraStream) return;
+      const track = cameraStream.getVideoTracks()[0];
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      if (!caps.torch) {
+        showToast('Flash non supportato su questo dispositivo');
+        return;
+      }
+      torchOn = !torchOn;
+      await track.applyConstraints({ advanced: [{ torch: torchOn }] });
+      document.getElementById('btn-torch').innerHTML = `<i data-lucide="${torchOn ? 'zap' : 'zap-off'}" class="w-5 h-5 ${torchOn ? 'text-yellow-400' : ''}"></i>`;
+      lucide.createIcons();
+    }
+
+    function toggleCameraGrid() {
+      document.getElementById('camera-grid-overlay').classList.toggle('hidden');
+    }
+
+    function captureCameraFrame() {
+      const video = document.getElementById('camera-video');
+      if (!video.videoWidth) return;
+
+      const flash = document.getElementById('shutter-flash');
+      flash.classList.remove('hidden');
+      setTimeout(() => flash.classList.add('hidden'), 110);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video, 0, 0);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+
+      batchQueue.push(dataUrl);
+      updateBatchUI();
+    }
+
+    function updateBatchUI() {
+      const btn = document.getElementById('btn-batch-done');
+      if (batchQueue.length === 0) {
+        btn.classList.add('hidden');
+      } else {
+        btn.classList.remove('hidden');
+        document.getElementById('batch-thumb').src = batchQueue[batchQueue.length - 1];
+        document.getElementById('batch-count').textContent = batchQueue.length;
+      }
+    }
+
+    function finishBatchCapture() {
+      const captured = [...batchQueue];
+      closeLiveCamera();
+      enqueueImagesForCrop(captured);
+    }
+
+    function handleFilesSelected(e) {
+      const files = Array.from(e.target.files || []);
+      e.target.value = '';
+      if (files.length === 0) return;
+
+      Promise.all(files.map(file => new Promise(resolve => {
+        const reader = new FileReader();
+        reader.onload = ev => resolve(ev.target.result);
+        reader.readAsDataURL(file);
+      }))).then(dataUrls => {
+        enqueueImagesForCrop(dataUrls);
+      });
+    }
+
+    /* =========================================================================
+       7. MOTORE RITAGLIO PROSPETTICO & FILTRI DOCUMENTO
+       ========================================================================= */
+    function enqueueImagesForCrop(dataUrls, targetDocId = null, targetPageIdx = null) {
+      cropQueue = dataUrls.map((url, i) => ({
+        rawDataUrl: url,
+        targetDocId: appendingToActiveDoc ? activeDocId : targetDocId,
+        targetPageIdx: targetPageIdx !== null ? targetPageIdx : null,
+        batchPages: []
+      }));
+      processNextInCropQueue();
+    }
+
+    let pendingNewDocPages = [];
+
+    function processNextInCropQueue() {
+      if (cropQueue.length === 0) {
+        if (pendingNewDocPages.length > 0) {
+          finalizeNewDocument(pendingNewDocPages);
+          pendingNewDocPages = [];
+        }
+        return;
+      }
+      currentCropItem = cropQueue.shift();
+      document.getElementById('crop-title').textContent = cropQueue.length > 0
+        ? `Ritaglia (${cropQueue.length + 1} rimanenti)`
+        : 'Ritaglia Bordi';
+
+      cropImg = new Image();
+      cropImg.onload = () => {
+        document.getElementById('crop-modal').classList.remove('hidden');
+        setupCropCanvas();
+        autoDetectDocumentEdges(true);
+      };
+      cropImg.src = currentCropItem.rawDataUrl;
+    }
+
+    function closeCropModal() {
+      cropQueue = [];
+      pendingNewDocPages = [];
+      document.getElementById('crop-modal').classList.add('hidden');
+    }
+
+    function setupCropCanvas() {
+      const stage = document.getElementById('crop-stage');
+      const canvas = document.getElementById('crop-canvas');
+      const maxW = stage.clientWidth - 32;
+      const maxH = stage.clientHeight - 32;
+      const scale = Math.min(maxW / cropImg.width, maxH / cropImg.height, 1);
+
+      canvas.width = Math.round(cropImg.width * scale);
+      canvas.height = Math.round(cropImg.height * scale);
+      canvas.getContext('2d').drawImage(cropImg, 0, 0, canvas.width, canvas.height);
+
+      // Default margine 8%
+      const mx = cropImg.width * 0.08;
+      const my = cropImg.height * 0.08;
+      cropCorners = [
+        { x: mx, y: my },
+        { x: cropImg.width - mx, y: my },
+        { x: cropImg.width - mx, y: cropImg.height - my },
+        { x: mx, y: cropImg.height - my }
+      ];
+      updateCropHandlesUI();
+    }
+
+    function autoDetectDocumentEdges(silent = false) {
+      // Analisi gradiente luminosità per stimare i 4 angoli del foglio chiaro
+      const tmp = document.createElement('canvas');
+      const w = 160;
+      const h = Math.round(cropImg.height * (w / cropImg.width));
+      tmp.width = w; tmp.height = h;
+      const ctx = tmp.getContext('2d');
+      ctx.drawImage(cropImg, 0, 0, w, h);
+      const data = ctx.getImageData(0, 0, w, h).data;
+
+      let minX = w, maxX = 0, minY = h, maxY = 0, count = 0;
+      for (let y = 6; y < h - 6; y++) {
+        for (let x = 6; x < w - 6; x++) {
+          const i = (y * w + x) * 4;
+          const lum = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
+          if (lum > 145) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+            count++;
+          }
+        }
+      }
+
+      const sx = cropImg.width / w;
+      const sy = cropImg.height / h;
+      if (count > (w * h * 0.15) && (maxX - minX) > w * 0.35 && (maxY - minY) > h * 0.35) {
+        cropCorners = [
+          { x: Math.max(0, minX * sx), y: Math.max(0, minY * sy) },
+          { x: Math.min(cropImg.width, maxX * sx), y: Math.max(0, minY * sy) },
+          { x: Math.min(cropImg.width, maxX * sx), y: Math.min(cropImg.height, maxY * sy) },
+          { x: Math.max(0, minX * sx), y: Math.min(cropImg.height, maxY * sy) }
+        ];
+        if (!silent) showToast('Bordi rilevati automaticamente');
+      } else {
+        resetFullFrameCrop();
+        if (!silent) showToast('Usa le maniglie blu per rifinire i bordi');
+      }
+      updateCropHandlesUI();
+    }
+
+    function resetFullFrameCrop() {
+      cropCorners = [
+        { x: 0, y: 0 },
+        { x: cropImg.width, y: 0 },
+        { x: cropImg.width, y: cropImg.height },
+        { x: 0, y: cropImg.height }
+      ];
+      updateCropHandlesUI();
+    }
+
+    function rotateCropSource(deg) {
+      const c = document.createElement('canvas');
+      c.width = cropImg.height;
+      c.height = cropImg.width;
+      const ctx = c.getContext('2d');
+      ctx.translate(c.width / 2, c.height / 2);
+      ctx.rotate((deg * Math.PI) / 180);
+      ctx.drawImage(cropImg, -cropImg.width / 2, -cropImg.height / 2);
+      currentCropItem.rawDataUrl = c.toDataURL('image/jpeg', 0.92);
+      cropImg.src = currentCropItem.rawDataUrl;
+    }
+
+    function updateCropHandlesUI() {
+      const canvas = document.getElementById('crop-canvas');
+      const stage = document.getElementById('crop-stage');
+      const rect = canvas.getBoundingClientRect();
+      const stageRect = stage.getBoundingClientRect();
+      const offsetX = rect.left - stageRect.left;
+      const offsetY = rect.top - stageRect.top;
+      const scaleX = rect.width / cropImg.width;
+      const scaleY = rect.height / cropImg.height;
+
+      const pts = cropCorners.map(c => ({
+        x: offsetX + c.x * scaleX,
+        y: offsetY + c.y * scaleY
+      }));
+
+      pts.forEach((p, idx) => {
+        const h = document.getElementById('handle-' + idx);
+        h.style.left = p.x + 'px';
+        h.style.top = p.y + 'px';
+      });
+
+      const svg = document.getElementById('crop-overlay-svg');
+      svg.style.left = offsetX + 'px';
+      svg.style.top = offsetY + 'px';
+      svg.setAttribute('width', rect.width);
+      svg.setAttribute('height', rect.height);
+
+      const relPts = cropCorners.map(c => `${c.x * scaleX},${c.y * scaleY}`).join(' ');
+      svg.innerHTML = `
+        <polygon points="${relPts}" fill="rgba(0, 122, 255, 0.14)" stroke="#007AFF" stroke-width="2.5" />
+      `;
+    }
+
+    // Gestione trascinamento maniglie + lente
+    (function bindCropHandles() {
+      const stage = document.getElementById('crop-stage');
+      const magnifier = document.getElementById('magnifier');
+      const magCanvas = document.getElementById('magnifier-canvas');
+      const magCtx = magCanvas.getContext('2d');
+
+      function onDown(e) {
+        const handle = e.target.closest('.crop-handle');
+        if (!handle) return;
+        activeHandleIdx = parseInt(handle.dataset.idx, 10);
+        handle.classList.add('active');
+        magnifier.classList.remove('hidden');
+        onMove(e);
+      }
+
+      function onMove(e) {
+        if (activeHandleIdx < 0) return;
+        e.preventDefault();
+        const touch = e.touches ? e.touches[0] : e;
+        const canvas = document.getElementById('crop-canvas');
+        const rect = canvas.getBoundingClientRect();
+        const x = Math.max(0, Math.min(rect.width, touch.clientX - rect.left));
+        const y = Math.max(0, Math.min(rect.height, touch.clientY - rect.top));
+
+        const imgX = (x / rect.width) * cropImg.width;
+        const imgY = (y / rect.height) * cropImg.height;
+        cropCorners[activeHandleIdx] = { x: imgX, y: imgY };
+        updateCropHandlesUI();
+
+        // Posiziona lente sopra il dito
+        magnifier.style.left = Math.max(12, Math.min(window.innerWidth - 124, touch.clientX - 56)) + 'px';
+        magnifier.style.top = Math.max(60, touch.clientY - 140) + 'px';
+        magCtx.fillStyle = '#000';
+        magCtx.fillRect(0, 0, 112, 112);
+        const zoomSize = 140;
+        magCtx.drawImage(cropImg, imgX - zoomSize / 2, imgY - zoomSize / 2, zoomSize, zoomSize, 0, 0, 112, 112);
+      }
+
+      function onUp() {
+        if (activeHandleIdx >= 0) {
+          document.getElementById('handle-' + activeHandleIdx).classList.remove('active');
+          activeHandleIdx = -1;
+          magnifier.classList.add('hidden');
+        }
+      }
+
+      stage.addEventListener('mousedown', onDown);
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+      stage.addEventListener('touchstart', onDown, { passive: false });
+      window.addEventListener('touchmove', onMove, { passive: false });
+      window.addEventListener('touchend', onUp);
+      window.addEventListener('resize', () => {
+        if (!document.getElementById('crop-modal').classList.contains('hidden')) updateCropHandlesUI();
+      });
+    })();
+
+    // Trasformazione Omografica (Warp Perspective)
+    function computeHomography(src, dst) {
+      const A = [];
+      for (let i = 0; i < 4; i++) {
+        const xs = src[i].x, ys = src[i].y;
+        const xd = dst[i].x, yd = dst[i].y;
+        A.push([xs, ys, 1, 0, 0, 0, -xd * xs, -xd * ys, xd]);
+        A.push([0, 0, 0, xs, ys, 1, -yd * xs, -yd * ys, yd]);
+      }
+      // Eliminazione di Gauss
+      const n = 8;
+      for (let i = 0; i < n; i++) {
+        let maxRow = i;
+        for (let k = i + 1; k < n; k++) if (Math.abs(A[k][i]) > Math.abs(A[maxRow][i])) maxRow = k;
+        [A[i], A[maxRow]] = [A[maxRow], A[i]];
+        for (let k = i + 1; k < n; k++) {
+          const f = A[k][i] / A[i][i];
+          for (let j = i; j <= n; j++) A[k][j] -= f * A[i][j];
+        }
+      }
+      const h = new Array(9);
+      h[8] = 1;
+      for (let i = n - 1; i >= 0; i--) {
+        let sum = A[i][n];
+        for (let j = i + 1; j < n; j++) sum -= A[i][j] * h[j];
+        h[i] = sum / A[i][i];
+      }
+      return h;
+    }
+
+    function applyPerspectiveCrop() {
+      const [tl, tr, br, bl] = cropCorners;
+      const topW = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+      const botW = Math.hypot(br.x - bl.x, br.y - bl.y);
+      const leftH = Math.hypot(bl.x - tl.x, bl.y - tl.y);
+      const rightH = Math.hypot(br.x - tr.x, br.y - tr.y);
+
+      let outW = Math.round(Math.max(topW, botW));
+      let outH = Math.round(Math.max(leftH, rightH));
+      const maxDim = 1650;
+      if (Math.max(outW, outH) > maxDim) {
+        const ratio = maxDim / Math.max(outW, outH);
+        outW = Math.round(outW * ratio);
+        outH = Math.round(outH * ratio);
+      }
+
+      const srcCanvas = document.createElement('canvas');
+      srcCanvas.width = cropImg.width;
+      srcCanvas.height = cropImg.height;
+      const srcCtx = srcCanvas.getContext('2d');
+      srcCtx.drawImage(cropImg, 0, 0);
+      const srcData = srcCtx.getImageData(0, 0, cropImg.width, cropImg.height);
+
+      const dstCanvas = document.createElement('canvas');
+      dstCanvas.width = outW;
+      dstCanvas.height = outH;
+      const dstCtx = dstCanvas.getContext('2d');
+      const dstImgData = dstCtx.createImageData(outW, outH);
+
+      // Mappatura inversa (dst -> src)
+      const H = computeHomography(
+        [{ x: 0, y: 0 }, { x: outW, y: 0 }, { x: outW, y: outH }, { x: 0, y: outH }],
+        [tl, tr, br, bl]
+      );
+
+      const sw = srcData.width, sh = srcData.height, sPix = srcData.data, dPix = dstImgData.data;
+      for (let y = 0; y < outH; y++) {
+        for (let x = 0; x < outW; x++) {
+          const w = H[6] * x + H[7] * y + H[8];
+          const sx = Math.round((H[0] * x + H[1] * y + H[2]) / w);
+          const sy = Math.round((H[3] * x + H[4] * y + H[5]) / w);
+          const di = (y * outW + x) * 4;
+          if (sx >= 0 && sx < sw && sy >= 0 && sy < sh) {
+            const si = (sy * sw + sx) * 4;
+            dPix[di] = sPix[si];
+            dPix[di + 1] = sPix[si + 1];
+            dPix[di + 2] = sPix[si + 2];
+            dPix[di + 3] = 255;
+          } else {
+            dPix[di] = dPix[di + 1] = dPix[di + 2] = dPix[di + 3] = 255;
+          }
+        }
+      }
+      dstCtx.putImageData(dstImgData, 0, 0);
+      const croppedUrl = dstCanvas.toDataURL('image/jpeg', 0.92);
+
+      // Applica filtro predefinito
+      applyFilterToDataUrl(croppedUrl, settings.defaultFilter, 0, 0).then(async (processedUrl) => {
+        const pageObj = {
+          id: 'pg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+          rawUrl: currentCropItem.rawDataUrl,
+          croppedUrl,
+          processedUrl,
+          filter: settings.defaultFilter,
+          brightness: 0,
+          contrast: 0,
+          annotations: []
+        };
+
+        if (currentCropItem.targetDocId && currentCropItem.targetPageIdx !== null) {
+          // Ri-ritaglio di pagina esistente
+          const doc = documents.find(d => d.id === currentCropItem.targetDocId);
+          if (doc) {
+            doc.pages[currentCropItem.targetPageIdx] = pageObj;
+            doc.updatedAt = Date.now();
+            await dbPut('documents', doc);
+            document.getElementById('crop-modal').classList.add('hidden');
+            openDocumentViewer(doc.id, currentCropItem.targetPageIdx);
+            renderDocuments();
+            return;
+          }
+        } else if (currentCropItem.targetDocId) {
+          // Aggiunta pagina a documento esistente
+          const doc = documents.find(d => d.id === currentCropItem.targetDocId);
+          if (doc) {
+            doc.pages.push(pageObj);
+            doc.updatedAt = Date.now();
+            await dbPut('documents', doc);
+            if (cropQueue.length === 0) {
+              document.getElementById('crop-modal').classList.add('hidden');
+              openDocumentViewer(doc.id, doc.pages.length - 1);
+              renderDocuments();
+              return;
+            }
+          }
+        } else {
+          pendingNewDocPages.push(pageObj);
+        }
+
+        if (cropQueue.length === 0) {
+          document.getElementById('crop-modal').classList.add('hidden');
+        }
+        processNextInCropQueue();
+      });
+    }
+
+    async function finalizeNewDocument(pages) {
+      const now = new Date();
+      const defaultTitle = `Scansione ${now.toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric' })} ${now.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}`;
+      const newDoc = {
+        id: 'doc_' + Date.now(),
+        title: defaultTitle,
+        folderId: currentFolderFilter !== 'all' ? currentFolderFilter : null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        ocrText: '',
+        pages
+      };
+      documents.unshift(newDoc);
+      await dbPut('documents', newDoc);
+      renderDocuments();
+      openDocumentViewer(newDoc.id, 0);
+    }
+
+    function applyFilterToDataUrl(dataUrl, filterType, brightness = 0, contrast = 0) {
+      return new Promise(resolve => {
+        const img = new Image();
+        img.onload = () => {
+          const c = document.createElement('canvas');
+          c.width = img.width;
+          c.height = img.height;
+          const ctx = c.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+
+          if (filterType === 'original' && brightness === 0 && contrast === 0) {
+            resolve(dataUrl);
+            return;
+          }
+
+          const imgData = ctx.getImageData(0, 0, c.width, c.height);
+          const d = imgData.data;
+
+          // Parametri profilo stile My Scans
+          let bOffset = Number(brightness);
+          let cFactor = Number(contrast);
+          if (filterType === 'document') { bOffset += 18; cFactor += 38; }
+          if (filterType === 'photo') { bOffset += 5; cFactor += 14; }
+          if (filterType === 'whiteboard') { bOffset += 28; cFactor += 52; }
+
+          const factor = (259 * (cFactor + 255)) / (255 * (259 - cFactor));
+
+          for (let i = 0; i < d.length; i += 4) {
+            let r = factor * (d[i] - 128) + 128 + bOffset;
+            let g = factor * (d[i+1] - 128) + 128 + bOffset;
+            let b = factor * (d[i+2] - 128) + 128 + bOffset;
+
+            if (filterType === 'bw') {
+              const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+              const bw = gray > 138 ? 255 : (gray < 85 ? 0 : (gray - 85) * 4.8);
+              r = g = b = bw;
+            } else if (filterType === 'document' || filterType === 'whiteboard') {
+              // Sbiancamento sfondo carta mantenendo colori inchiostro
+              if (r > 185 && g > 185 && b > 185) {
+                r = Math.min(255, r * 1.15);
+                g = Math.min(255, g * 1.15);
+                b = Math.min(255, b * 1.15);
+              }
+            }
+
+            d[i] = Math.max(0, Math.min(255, r));
+            d[i+1] = Math.max(0, Math.min(255, g));
+            d[i+2] = Math.max(0, Math.min(255, b));
+          }
+
+          ctx.putImageData(imgData, 0, 0);
+          resolve(c.toDataURL('image/jpeg', 0.90));
+        };
+        img.src = dataUrl;
+      });
+    }
+
+    /* =========================================================================
+       8. VISUALIZZATORE DOCUMENTO, FILTRI, ANNOTAZIONI & FIRMA
+       ========================================================================= */
+    function openDocumentViewer(docId, pageIndex = 0) {
+      activeDocId = docId;
+      activePageIdx = pageIndex;
+      document.getElementById('filter-drawer').classList.add('hidden');
+      document.getElementById('viewer-modal').classList.remove('hidden');
+      renderViewerPage();
+    }
+
+    function closeViewerModal() {
+      document.getElementById('viewer-modal').classList.add('hidden');
+      activeDocId = null;
+      renderDocuments();
+    }
+
+    function getActiveDoc() {
+      return documents.find(d => d.id === activeDocId);
+    }
+
+    function renderViewerPage() {
+      const doc = getActiveDoc();
+      if (!doc) return;
+      if (activePageIdx >= doc.pages.length) activePageIdx = Math.max(0, doc.pages.length - 1);
+      const page = doc.pages[activePageIdx];
+
+      document.getElementById('viewer-doc-title').textContent = doc.title;
+      document.getElementById('viewer-page-indicator').textContent = `Pagina ${activePageIdx + 1} di ${doc.pages.length}`;
+      document.getElementById('viewer-page-img').src = page.processedUrl;
+
+      document.getElementById('btn-prev-page').classList.toggle('hidden', activePageIdx === 0);
+      document.getElementById('btn-next-page').classList.toggle('hidden', activePageIdx >= doc.pages.length - 1);
+
+      // Aggiorna UI filtri
+      document.querySelectorAll('.filter-chip').forEach(btn => {
+        const active = btn.dataset.filter === page.filter;
+        btn.className = `filter-chip px-3.5 py-1.5 rounded-full text-xs font-semibold border ${active ? 'bg-[#007AFF] text-white border-[#007AFF]' : 'bg-gray-100 text-gray-700 border-gray-200'}`;
+      });
+      document.getElementById('slider-brightness').value = page.brightness || 0;
+      document.getElementById('val-brightness').textContent = page.brightness || 0;
+      document.getElementById('slider-contrast').value = page.contrast || 0;
+      document.getElementById('val-contrast').textContent = page.contrast || 0;
+
+      // Miniature pagine in basso
+      const strip = document.getElementById('page-thumbnails-strip');
+      strip.innerHTML = doc.pages.map((p, idx) => `
+        <div onclick="activePageIdx=${idx};renderViewerPage()" class="relative shrink-0 cursor-pointer rounded-lg overflow-hidden border-2 ${idx === activePageIdx ? 'border-[#007AFF]' : 'border-transparent opacity-70'}">
+          <img src="${p.processedUrl}" class="w-10 h-14 object-cover" />
+          <span class="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[9px] text-center">${idx + 1}</span>
+        </div>
+      `).join('') + (doc.pages.length > 1 ? `
+        <button onclick="deleteCurrentPage()" class="ml-auto shrink-0 text-xs text-red-500 font-medium px-2.5 py-1.5 rounded-lg bg-red-50">
+          Elimina pag.
+        </button>
+      ` : '');
+
+      renderPageAnnotations();
+    }
+
+    function changeViewerPage(delta) {
+      const doc = getActiveDoc();
+      if (!doc) return;
+      const next = activePageIdx + delta;
+      if (next >= 0 && next < doc.pages.length) {
+        activePageIdx = next;
+        renderViewerPage();
+      }
+    }
+
+    async function renameCurrentDocument() {
+      const doc = getActiveDoc();
+      if (!doc) return;
+      const newName = prompt('Rinomina documento:', doc.title);
+      if (!newName || !newName.trim()) return;
+      doc.title = newName.trim();
+      doc.updatedAt = Date.now();
+      await dbPut('documents', doc);
+      renderViewerPage();
+    }
+
+    function toggleFilterDrawer() {
+      document.getElementById('filter-drawer').classList.toggle('hidden');
+    }
+
+    async function setPageFilter(filterType) {
+      const doc = getActiveDoc();
+      const page = doc.pages[activePageIdx];
+      page.filter = filterType;
+      page.processedUrl = await applyFilterToDataUrl(page.croppedUrl, page.filter, page.brightness, page.contrast);
+      doc.updatedAt = Date.now();
+      await dbPut('documents', doc);
+      renderViewerPage();
+    }
+
+    let adjDebounce = null;
+    function onAdjustmentChange() {
+      const b = document.getElementById('slider-brightness').value;
+      const c = document.getElementById('slider-contrast').value;
+      document.getElementById('val-brightness').textContent = b;
+      document.getElementById('val-contrast').textContent = c;
+
+      clearTimeout(adjDebounce);
+      adjDebounce = setTimeout(async () => {
+        const doc = getActiveDoc();
+        const page = doc.pages[activePageIdx];
+        page.brightness = Number(b);
+        page.contrast = Number(c);
+        page.processedUrl = await applyFilterToDataUrl(page.croppedUrl, page.filter, page.brightness, page.contrast);
+        doc.updatedAt = Date.now();
+        await dbPut('documents', doc);
+        renderViewerPage();
+      }, 150);
+    }
+
+    function addMorePagesToDoc() {
+      appendingToActiveDoc = true;
+      document.getElementById('scan-action-sheet').classList.remove('hidden');
+    }
+
+    function reCropCurrentPage() {
+      const doc = getActiveDoc();
+      const page = doc.pages[activePageIdx];
+      enqueueImagesForCrop([page.rawUrl], doc.id, activePageIdx);
+    }
+
+    async function deleteCurrentPage() {
+      const doc = getActiveDoc();
+      if (!doc || doc.pages.length <= 1) return;
+      if (!confirm('Eliminare questa pagina dal documento?')) return;
+      doc.pages.splice(activePageIdx, 1);
+      doc.updatedAt = Date.now();
+      await dbPut('documents', doc);
+      renderViewerPage();
+    }
+
+    /* --- Annotazioni (Firme e Testo) --- */
+    function renderPageAnnotations() {
+      const doc = getActiveDoc();
+      const page = doc.pages[activePageIdx];
+      const layer = document.getElementById('annotations-layer');
+      layer.innerHTML = '';
+
+      (page.annotations || []).forEach((ann, idx) => {
+        const el = document.createElement('div');
+        el.style.position = 'absolute';
+        el.style.left = ann.x + '%';
+        el.style.top = ann.y + '%';
+        el.style.width = ann.w + '%';
+        el.style.cursor = 'move';
+        el.className = 'group border border-dashed border-[#007AFF]/70 rounded p-0.5 touch-none';
+
+        if (ann.type === 'signature') {
+          el.innerHTML = `<img src="${ann.dataUrl}" class="w-full h-auto pointer-events-none" />`;
+        } else {
+          el.innerHTML = `<div class="text-[#003399] font-semibold text-xs sm:text-sm leading-tight px-1 bg-white/60 rounded pointer-events-none">${escapeHtml(ann.text)}</div>`;
+        }
+
+        // Pulsante elimina annotazione
+        const delBtn = document.createElement('button');
+        delBtn.innerHTML = '×';
+        delBtn.className = 'absolute -top-2.5 -right-2.5 w-5 h-5 rounded-full bg-red-500 text-white text-xs flex items-center justify-center shadow';
+        delBtn.onclick = async (ev) => {
+          ev.stopPropagation();
+          page.annotations.splice(idx, 1);
+          await dbPut('documents', doc);
+          renderPageAnnotations();
+        };
+        el.appendChild(delBtn);
+
+        // Dragging annotazione
+        let startX, startY, origX, origY;
+        const startDrag = (ev) => {
+          if (ev.target === delBtn) return;
+          ev.preventDefault();
+          const pt = ev.touches ? ev.touches[0] : ev;
+          startX = pt.clientX; startY = pt.clientY;
+          origX = ann.x; origY = ann.y;
+          const layerRect = layer.getBoundingClientRect();
+
+          const moveDrag = (mv) => {
+            const mpt = mv.touches ? mv.touches[0] : mv;
+            const dx = ((mpt.clientX - startX) / layerRect.width) * 100;
+            const dy = ((mpt.clientY - startY) / layerRect.height) * 100;
+            ann.x = Math.max(0, Math.min(85, origX + dx));
+            ann.y = Math.max(0, Math.min(90, origY + dy));
+            el.style.left = ann.x + '%';
+            el.style.top = ann.y + '%';
+          };
+          const endDrag = async () => {
+            window.removeEventListener('mousemove', moveDrag);
+            window.removeEventListener('mouseup', endDrag);
+            window.removeEventListener('touchmove', moveDrag);
+            window.removeEventListener('touchend', endDrag);
+            await dbPut('documents', doc);
+          };
+          window.addEventListener('mousemove', moveDrag);
+          window.addEventListener('mouseup', endDrag);
+          window.addEventListener('touchmove', moveDrag, { passive: false });
+          window.addEventListener('touchend', endDrag);
+        };
+        el.addEventListener('mousedown', startDrag);
+        el.addEventListener('touchstart', startDrag, { passive: false });
+
+        layer.appendChild(el);
+      });
+    }
+
+    async function addTextAnnotationPrompt() {
+      const txt = prompt('Inserisci testo da applicare sul documento (es. data, note):');
+      if (!txt || !txt.trim()) return;
+      const doc = getActiveDoc();
+      const page = doc.pages[activePageIdx];
+      page.annotations = page.annotations || [];
+      page.annotations.push({ type: 'text', text: txt.trim(), x: 25, y: 45, w: 40 });
+      await dbPut('documents', doc);
+      renderPageAnnotations();
+      showToast('Trascina il testo per posizionarlo');
+    }
+
+    /* --- Pad Firma Digitale --- */
+    let sigColor = '#000000';
+    let isDrawingSig = false;
+
+    function openSignatureModal() {
+      document.getElementById('signature-modal').classList.remove('hidden');
+      clearSignaturePad();
+    }
+    function closeSignatureModal() {
+      document.getElementById('signature-modal').classList.add('hidden');
+    }
+    function setSigColor(hex) {
+      sigColor = hex;
+    }
+    function clearSignaturePad() {
+      const c = document.getElementById('signature-pad');
+      c.getContext('2d').clearRect(0, 0, c.width, c.height);
+    }
+
+    (function initSignaturePad() {
+      const c = document.getElementById('signature-pad');
+      const ctx = c.getContext('2d');
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 3.5;
+
+      function getPos(e) {
+        const rect = c.getBoundingClientRect();
+        const pt = e.touches ? e.touches[0] : e;
+        return {
+          x: (pt.clientX - rect.left) * (c.width / rect.width),
+          y: (pt.clientY - rect.top) * (c.height / rect.height)
+        };
+      }
+
+      c.addEventListener('mousedown', e => { isDrawingSig = true; ctx.strokeStyle = sigColor; const p = getPos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); });
+      c.addEventListener('mousemove', e => { if (!isDrawingSig) return; const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); });
+      window.addEventListener('mouseup', () => { isDrawingSig = false; });
+
+      c.addEventListener('touchstart', e => { e.preventDefault(); isDrawingSig = true; ctx.strokeStyle = sigColor; const p = getPos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); }, { passive: false });
+      c.addEventListener('touchmove', e => { e.preventDefault(); if (!isDrawingSig) return; const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); }, { passive: false });
+      window.addEventListener('touchend', () => { isDrawingSig = false; });
+    })();
+
+    async function confirmSignature() {
+      const c = document.getElementById('signature-pad');
+      const dataUrl = c.toDataURL('image/png');
+      const doc = getActiveDoc();
+      const page = doc.pages[activePageIdx];
+      page.annotations = page.annotations || [];
+      page.annotations.push({ type: 'signature', dataUrl, x: 32, y: 65, w: 32 });
+      await dbPut('documents', doc);
+      closeSignatureModal();
+      renderPageAnnotations();
+      showToast('Firma inserita: trascinala dove vuoi');
+    }
+
+    /* =========================================================================
+       9. RICONOSCIMENTO TESTO (OCR TESSERACT.JS)
+       ========================================================================= */
+    async function runOCRCurrentDocument() {
+      const doc = getActiveDoc();
+      if (!doc) return;
+      document.getElementById('ocr-modal').classList.remove('hidden');
+      document.getElementById('ocr-loading').classList.remove('hidden');
+      document.getElementById('ocr-result-box').classList.add('hidden');
+      document.getElementById('ocr-status-text').textContent = 'Analisi testo in corso (può richiedere qualche secondo)...';
+
+      try {
+        let fullText = '';
+        for (let i = 0; i < doc.pages.length; i++) {
+          document.getElementById('ocr-status-text').textContent = `Lettura pagina ${i + 1} di ${doc.pages.length}...`;
+          const res = await Tesseract.recognize(doc.pages[i].processedUrl, settings.ocrLang || 'ita');
+          fullText += (doc.pages.length > 1 ? `--- Pagina ${i + 1} ---\n` : '') + res.data.text.trim() + '\n\n';
+        }
+        doc.ocrText = fullText.trim();
+        await dbPut('documents', doc);
+
+        document.getElementById('ocr-textarea').value = doc.ocrText || 'Nessun testo leggibile rilevato.';
+        document.getElementById('ocr-loading').classList.add('hidden');
+        document.getElementById('ocr-result-box').classList.remove('hidden');
+      } catch (err) {
+        document.getElementById('ocr-status-text').textContent = 'Errore OCR: verifica la connessione internet al primo avvio.';
+      }
+    }
+
+    function closeOCRModal() {
+      document.getElementById('ocr-modal').classList.add('hidden');
+    }
+
+    function copyOCRText() {
+      navigator.clipboard.writeText(document.getElementById('ocr-textarea').value);
+      showToast('Testo copiato negli appunti');
+    }
+
+    async function saveEditedOCRText() {
+      const doc = getActiveDoc();
+      doc.ocrText = document.getElementById('ocr-textarea').value;
+      await dbPut('documents', doc);
+      showToast('Testo OCR salvato');
+      closeOCRModal();
+    }
+
+    function downloadOCRAsTxt() {
+      const doc = getActiveDoc();
+      const blob = new Blob([document.getElementById('ocr-textarea').value], { type: 'text/plain;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${doc.title}.txt`;
+      a.click();
+    }
+
+    /* =========================================================================
+       10. ESPORTAZIONE PDF MULTI-PAGINA, CONDIVISIONE & GESTIONE
+       ========================================================================= */
+    function openExportShareSheet() {
+      document.getElementById('export-sheet').classList.remove('hidden');
+    }
+    function closeExportShareSheet() {
+      document.getElementById('export-sheet').classList.add('hidden');
+    }
+
+    // Fonde immagine pagina + annotazioni (firme e testi) su un unico canvas
+    function renderCompositePageCanvas(page) {
+      return new Promise(resolve => {
+        const img = new Image();
+        img.onload = async () => {
+          const c = document.createElement('canvas');
+          c.width = img.width;
+          c.height = img.height;
+          const ctx = c.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+
+          for (const ann of (page.annotations || [])) {
+            const ax = (ann.x / 100) * c.width;
+            const ay = (ann.y / 100) * c.height;
+            const aw = (ann.w / 100) * c.width;
+
+            if (ann.type === 'signature') {
+              await new Promise(resSig => {
+                const sImg = new Image();
+                sImg.onload = () => {
+                  const ah = aw * (sImg.height / sImg.width);
+                  ctx.drawImage(sImg, ax, ay, aw, ah);
+                  resSig();
+                };
+                sImg.src = ann.dataUrl;
+              });
+            } else if (ann.type === 'text') {
+              const fontSize = Math.max(20, Math.round(c.width * 0.026));
+              ctx.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, sans-serif`;
+              ctx.fillStyle = '#003399';
+              ctx.fillText(ann.text, ax, ay + fontSize);
+            }
+          }
+          resolve(c);
+        };
+        img.src = page.processedUrl;
+      });
+    }
+
+    async function exportCurrentDocPDF(mode = 'download') {
+      closeExportShareSheet();
+      const doc = getActiveDoc();
+      if (!doc) return;
+      showToast('Generazione PDF in corso...');
+
+      const { jsPDF } = window.jspdf;
+      const format = settings.pdfSize || 'a4';
+      let pdf = null;
+
+      for (let i = 0; i < doc.pages.length; i++) {
+        const canvas = await renderCompositePageCanvas(doc.pages[i]);
+        const imgData = canvas.toDataURL('image/jpeg', 0.90);
+        const isLandscape = canvas.width > canvas.height;
+        const orient = isLandscape ? 'l' : 'p';
+
+        if (format === 'fit') {
+          const pxToMm = 0.264583;
+          const wMm = canvas.width * pxToMm;
+          const hMm = canvas.height * pxToMm;
+          if (i === 0) pdf = new jsPDF({ orientation: orient, unit: 'mm', format: [wMm, hMm] });
+          else pdf.addPage([wMm, hMm], orient);
+          pdf.addImage(imgData, 'JPEG', 0, 0, wMm, hMm);
+        } else {
+          if (i === 0) pdf = new jsPDF({ orientation: orient, unit: 'mm', format });
+          else pdf.addPage(format, orient);
+          const pageW = pdf.internal.pageSize.getWidth();
+          const pageH = pdf.internal.pageSize.getHeight();
+          const ratio = Math.min(pageW / canvas.width, pageH / canvas.height);
+          const drawW = canvas.width * ratio;
+          const drawH = canvas.height * ratio;
+          pdf.addImage(imgData, 'JPEG', (pageW - drawW) / 2, (pageH - drawH) / 2, drawW, drawH);
+        }
+      }
+
+      const fileName = `${doc.title.replace(/[^a-zA-Z0-9_\-\s]/g, '_')}.pdf`;
+      const pdfBlob = pdf.output('blob');
+
+      if (mode === 'share' && navigator.canShare) {
+        const file = new File([pdfBlob], fileName, { type: 'application/pdf' });
+        if (navigator.canShare({ files: [file] })) {
+          try {
+            await navigator.share({ files: [file], title: doc.title });
+            return;
+          } catch (e) {}
+        }
+      }
+
+      const url = URL.createObjectURL(pdfBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      showToast('PDF scaricato');
+    }
+
+    async function exportCurrentPageJPEG() {
+      closeExportShareSheet();
+      const doc = getActiveDoc();
+      const canvas = await renderCompositePageCanvas(doc.pages[activePageIdx]);
+      const a = document.createElement('a');
+      a.href = canvas.toDataURL('image/jpeg', 0.94);
+      a.download = `${doc.title}_pag${activePageIdx + 1}.jpg`;
+      a.click();
+      showToast('Immagine JPEG salvata');
+    }
+
+    async function moveDocToFolderPrompt() {
+      closeExportShareSheet();
+      const doc = getActiveDoc();
+      const menu = folders.map((f, i) => `${i + 1}. ${f.name}`).join('\n');
+      const choice = prompt(`Scegli numero cartella (0 per rimuovere dalla cartella):\n0. Nessuna cartella\n${menu}`);
+      if (choice === null) return;
+      const idx = parseInt(choice, 10);
+      if (idx === 0) doc.folderId = null;
+      else if (folders[idx - 1]) doc.folderId = folders[idx - 1].id;
+      await dbPut('documents', doc);
+      showToast('Cartella aggiornata');
+    }
+
+    async function deleteCurrentDocument() {
+      closeExportShareSheet();
+      const doc = getActiveDoc();
+      if (!doc || !confirm(`Eliminare definitivamente "${doc.title}"?`)) return;
+      await dbDelete('documents', doc.id);
+      documents = documents.filter(d => d.id !== doc.id);
+      closeViewerModal();
+      showToast('Documento eliminato');
+    }
+
+    async function deleteSelectedDocs() {
+      if (selectedDocIds.size === 0) return;
+      if (!confirm(`Eliminare ${selectedDocIds.size} documenti selezionati?`)) return;
+      for (const id of selectedDocIds) {
+        await dbDelete('documents', id);
+      }
+      documents = documents.filter(d => !selectedDocIds.has(d.id));
+      toggleSelectMode();
+      showToast('Documenti eliminati');
+    }
+
+    async function mergeSelectedDocs() {
+      if (selectedDocIds.size < 2) {
+        showToast('Seleziona almeno 2 documenti da unire');
+        return;
+      }
+      const toMerge = documents.filter(d => selectedDocIds.has(d.id));
+      const mergedPages = toMerge.flatMap(d => d.pages);
+      const mergedDoc = {
+        id: 'doc_' + Date.now(),
+        title: `Documento Unito (${toMerge.length})`,
+        folderId: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        ocrText: toMerge.map(d => d.ocrText).filter(Boolean).join('\n\n'),
+        pages: mergedPages
+      };
+      documents.unshift(mergedDoc);
+      await dbPut('documents', mergedDoc);
+      toggleSelectMode();
+      showToast('Documenti uniti in un nuovo PDF');
+    }
+
+    /* =========================================================================
+       11. IMPOSTAZIONI & BACKUP
+       ========================================================================= */
+    function loadSettingsUI() {
+      document.getElementById('setting-pdf-size').value = settings.pdfSize || 'a4';
+      document.getElementById('setting-default-filter').value = settings.defaultFilter || 'document';
+      document.getElementById('setting-ocr-lang').value = settings.ocrLang || 'ita';
+    }
+
+    function saveSettings() {
+      settings.pdfSize = document.getElementById('setting-pdf-size').value;
+      settings.defaultFilter = document.getElementById('setting-default-filter').value;
+      settings.ocrLang = document.getElementById('setting-ocr-lang').value;
+      localStorage.setItem('myscans_settings', JSON.stringify(settings));
+      showToast('Impostazioni salvate');
+    }
+
+    function exportBackupJSON() {
+      const blob = new Blob([JSON.stringify({ documents, folders })], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `myscans_backup_${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+    }
+
+    async function clearAllStorage() {
+      if (!confirm('Vuoi davvero cancellare tutti i documenti salvati nel browser?')) return;
+      for (const d of documents) await dbDelete('documents', d.id);
+      documents = [];
+      renderDocuments();
+      showToast('Archivio svuotato');
+    }
+
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+    }
+  </script>
+</body>
+</html>
