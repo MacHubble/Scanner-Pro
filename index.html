@@ -52,7 +52,6 @@
     .pt-safe { padding-top: var(--safe-top); }
     .pb-safe { padding-bottom: var(--safe-bottom); }
 
-    /* Animazioni stile iOS */
     @keyframes slideUp {
       from { transform: translateY(100%); opacity: 0.7; }
       to { transform: translateY(0); opacity: 1; }
@@ -304,11 +303,14 @@
     </div>
   </div>
 
-  <!-- ==================== FOTOCAMERA LIVE BATCH (STILE MY SCANS) ==================== -->
+  <!-- ==================== FOTOCAMERA LIVE BATCH CON RILEVAMENTO BORDI LIVE ==================== -->
   <div id="camera-modal" class="hidden fixed inset-0 z-50 bg-black text-white flex flex-col pt-safe pb-safe">
     <div class="flex items-center justify-between px-4 py-3 z-10">
       <button onclick="closeLiveCamera()" class="text-white text-[17px] font-normal px-2 py-1">Annulla</button>
-      <div class="flex items-center gap-4">
+      <div class="flex items-center gap-3">
+        <button id="btn-live-detect" onclick="toggleLiveEdgeDetection()" class="px-2.5 py-1 rounded-full bg-[#34C759]/25 text-[#34C759] text-xs font-semibold border border-[#34C759]/40">
+          Auto-Bordi ON
+        </button>
         <button id="btn-torch" onclick="toggleTorch()" class="p-2 rounded-full bg-white/10 text-white" title="Flash">
           <i data-lucide="zap-off" class="w-5 h-5"></i>
         </button>
@@ -322,27 +324,35 @@
     </div>
 
     <!-- Viewfinder -->
-    <div class="relative flex-1 flex items-center justify-center overflow-hidden bg-black">
+    <div id="camera-viewfinder" class="relative flex-1 flex items-center justify-center overflow-hidden bg-black">
       <video id="camera-video" autoplay playsinline class="w-full h-full object-cover"></video>
       
+      <!-- Griglia dei terzi -->
       <div id="camera-grid-overlay" class="absolute inset-0 pointer-events-none">
         <div class="w-full h-full grid grid-cols-3 grid-rows-3">
-          <div class="border-r border-b border-white/25"></div>
-          <div class="border-r border-b border-white/25"></div>
-          <div class="border-b border-white/25"></div>
-          <div class="border-r border-b border-white/25"></div>
-          <div class="border-r border-b border-white/25"></div>
-          <div class="border-b border-white/25"></div>
-          <div class="border-r border-white/25"></div>
-          <div class="border-r border-white/25"></div>
+          <div class="border-r border-b border-white/20"></div>
+          <div class="border-r border-b border-white/20"></div>
+          <div class="border-b border-white/20"></div>
+          <div class="border-r border-b border-white/20"></div>
+          <div class="border-r border-b border-white/20"></div>
+          <div class="border-b border-white/20"></div>
+          <div class="border-r border-white/20"></div>
+          <div class="border-r border-white/20"></div>
           <div></div>
-        </div>
-        <div class="absolute inset-x-8 inset-y-12 border-2 border-[#007AFF]/70 rounded-lg pointer-events-none flex items-end justify-center pb-2">
-          <span class="bg-black/60 text-white/90 text-[11px] px-2.5 py-0.5 rounded-full">Inquadra il documento</span>
         </div>
       </div>
 
-      <div id="shutter-flash" class="hidden absolute inset-0 bg-white pointer-events-none"></div>
+      <!-- Poligono Live Rilevamento Documento -->
+      <svg id="live-edge-svg" class="absolute inset-0 w-full h-full pointer-events-none z-10"></svg>
+
+      <!-- Badge stato rilevamento -->
+      <div class="absolute bottom-4 inset-x-0 flex justify-center pointer-events-none z-10">
+        <span id="live-detect-badge" class="bg-black/65 backdrop-blur-md text-white/95 text-xs font-medium px-3 py-1 rounded-full border border-white/15">
+          Ricerca bordi documento...
+        </span>
+      </div>
+
+      <div id="shutter-flash" class="hidden absolute inset-0 bg-white pointer-events-none z-20"></div>
     </div>
 
     <!-- Controlli inferiori fotocamera -->
@@ -472,9 +482,7 @@
     </div>
 
     <!-- Strip miniature multi-pagina -->
-    <div id="page-thumbnails-strip" class="bg-white/90 border-t border-gray-200 px-3 py-2 flex items-center gap-2 overflow-x-auto no-scrollbar">
-      <!-- Popolato via JS -->
-    </div>
+    <div id="page-thumbnails-strip" class="bg-white/90 border-t border-gray-200 px-3 py-2 flex items-center gap-2 overflow-x-auto no-scrollbar"></div>
 
     <!-- Toolbar inferiore Editor (Aggiungi, Ritaglia, Filtri, Ruota) -->
     <div class="ios-blur border-t border-gray-300 px-2 py-2.5 grid grid-cols-4 gap-1 text-center">
@@ -631,11 +639,15 @@
     let selectMode = false;
     let selectedDocIds = new Set();
 
-    // Stato Fotocamera & Batch
+    // Stato Fotocamera & Rilevamento Live
     let cameraStream = null;
     let facingMode = 'environment';
     let torchOn = false;
-    let batchQueue = [];
+    let batchQueue = []; // { dataUrl, presetCorners }
+    let liveDetectEnabled = true;
+    let liveDetectTimer = null;
+    let smoothedLiveCorners = null; // coordinate normalizzate [0..1]
+    let lastValidLiveCorners = null;
 
     // Stato Ritaglio Prospettico
     let cropQueue = [];
@@ -898,7 +910,224 @@
     }
 
     /* =========================================================================
-       6. ACQUISIZIONE FOTOCAMERA LIVE & GALLERIA
+       6. MOTORE RILEVAMENTO BORDI DI PRECISIONE (SPAZIO COLORE + FLOOD FILL + REGRESSIONE RETTE)
+       ========================================================================= */
+    const DocumentDetector = {
+      detect(sourceCanvasOrImg) {
+        const srcW = sourceCanvasOrImg.videoWidth || sourceCanvasOrImg.width;
+        const srcH = sourceCanvasOrImg.videoHeight || sourceCanvasOrImg.height;
+        if (!srcW || !srcH) return null;
+
+        const w = 220;
+        const h = Math.max(120, Math.round(srcH * (w / srcW)));
+        const tmp = document.createElement('canvas');
+        tmp.width = w;
+        tmp.height = h;
+        const ctx = tmp.getContext('2d');
+        ctx.drawImage(sourceCanvasOrImg, 0, 0, w, h);
+        const rgba = ctx.getImageData(0, 0, w, h).data;
+
+        // 1. Calcola Luminanza (L) e Saturazione (S) per ogni pixel
+        const lum = new Float32Array(w * h);
+        const sat = new Float32Array(w * h);
+        for (let i = 0; i < w * h; i++) {
+          const p = i * 4;
+          const r = rgba[p], g = rgba[p + 1], b = rgba[p + 2];
+          const maxC = Math.max(r, g, b);
+          const minC = Math.min(r, g, b);
+          lum[i] = 0.299 * r + 0.587 * g + 0.114 * b;
+          sat[i] = maxC > 0 ? ((maxC - minC) / maxC) * 255 : 0;
+        }
+
+        // 2. Sfocatura 3x3 per rendere omogeneo l'interno del foglio (ignora testo e righe)
+        const bLum = new Float32Array(w * h);
+        const bSat = new Float32Array(w * h);
+        for (let y = 1; y < h - 1; y++) {
+          for (let x = 1; x < w - 1; x++) {
+            let sL = 0, sS = 0;
+            for (let dy = -1; dy <= 1; dy++) {
+              for (let dx = -1; dx <= 1; dx++) {
+                const idx = (y + dy) * w + (x + dx);
+                sL += lum[idx];
+                sS += sat[idx];
+              }
+            }
+            bLum[y * w + x] = sL / 9;
+            bSat[y * w + x] = sS / 9;
+          }
+        }
+
+        // 3. Campiona il "seme" (colore/luminanza del foglio) nella zona centrale (20% centrale)
+        let seedL = 0, seedS = 0, seedCount = 0;
+        const cx1 = Math.round(w * 0.40), cx2 = Math.round(w * 0.60);
+        const cy1 = Math.round(h * 0.40), cy2 = Math.round(h * 0.60);
+        for (let y = cy1; y <= cy2; y++) {
+          for (let x = cx1; x <= cx2; x++) {
+            const idx = y * w + x;
+            seedL += bLum[idx];
+            seedS += bSat[idx];
+            seedCount++;
+          }
+        }
+        seedL /= seedCount;
+        seedS /= seedCount;
+
+        // 4. Region Growing (Flood-Fill BFS dal centro) per isolare il foglio ed escludere oggetti esterni
+        const visited = new Uint8Array(w * h);
+        const queue = new Int32Array(w * h);
+        let head = 0, tail = 0;
+
+        for (let y = cy1; y <= cy2; y += 2) {
+          for (let x = cx1; x <= cx2; x += 2) {
+            const idx = y * w + x;
+            visited[idx] = 1;
+            queue[tail++] = idx;
+          }
+        }
+
+        const lumTol = 42;
+        const satTol = 36;
+        const gradTol = 22;
+        let regionCount = 0;
+
+        while (head < tail) {
+          const curr = queue[head++];
+          regionCount++;
+          const cx = curr % w;
+          const cy = (curr - cx) / w;
+          if (cx <= 2 || cx >= w - 3 || cy <= 2 || cy >= h - 3) continue;
+
+          const neighbors = [curr - 1, curr + 1, curr - w, curr + w];
+          for (let n = 0; n < 4; n++) {
+            const nIdx = neighbors[n];
+            if (visited[nIdx]) continue;
+
+            const diffSeedL = Math.abs(bLum[nIdx] - seedL);
+            const diffSeedS = Math.abs(bSat[nIdx] - seedS);
+            const stepGrad = Math.abs(bLum[nIdx] - bLum[curr]) + Math.abs(bSat[nIdx] - bSat[curr]) * 0.7;
+
+            if (diffSeedL < lumTol && diffSeedS < satTol && stepGrad < gradTol) {
+              visited[nIdx] = 1;
+              queue[tail++] = nIdx;
+            }
+          }
+        }
+
+        // Verifica che la regione trovata abbia dimensioni realistiche per un documento
+        if (regionCount < w * h * 0.14 || regionCount > w * h * 0.94) {
+          return null;
+        }
+
+        // 5. Estrai i punti del contorno esterno della regione segmentata (4 lati: Top, Right, Bottom, Left)
+        const topPts = [], botPts = [], leftPts = [], rightPts = [];
+
+        // Scansione verticale per lato superiore e inferiore
+        for (let x = Math.round(w * 0.12); x < Math.round(w * 0.88); x++) {
+          let firstY = -1, lastY = -1;
+          for (let y = 3; y < h - 3; y++) {
+            if (visited[y * w + x]) {
+              if (firstY === -1) firstY = y;
+              lastY = y;
+            }
+          }
+          if (firstY !== -1 && lastY - firstY > h * 0.25) {
+            topPts.push({ x, y: firstY });
+            botPts.push({ x, y: lastY });
+          }
+        }
+
+        // Scansione orizzontale per lato sinistro e destro
+        for (let y = Math.round(h * 0.12); y < Math.round(h * 0.88); y++) {
+          let firstX = -1, lastX = -1;
+          for (let x = 3; x < w - 3; x++) {
+            if (visited[y * w + x]) {
+              if (firstX === -1) firstX = x;
+              lastX = x;
+            }
+          }
+          if (firstX !== -1 && lastX - firstX > w * 0.25) {
+            leftPts.push({ x: firstX, y });
+            rightPts.push({ x: lastX, y });
+          }
+        }
+
+        if (topPts.length < 15 || botPts.length < 15 || leftPts.length < 15 || rightPts.length < 15) {
+          return null;
+        }
+
+        // 6. Fit robusto delle 4 rette (RANSAC / mediana degli scarti) per ignorare eventuali dita o ombre sui bordi
+        const lineTop = this.fitLineRobust(topPts, false);     // y = m*x + q
+        const lineBot = this.fitLineRobust(botPts, false);     // y = m*x + q
+        const lineLeft = this.fitLineRobust(leftPts, true);    // x = m*y + q
+        const lineRight = this.fitLineRobust(rightPts, true);  // x = m*y + q
+
+        if (!lineTop || !lineBot || !lineLeft || !lineRight) return null;
+
+        // 7. Intersezione delle 4 rette per ottenere i 4 vertici prospettici esatti
+        const tl = this.intersectHV(lineTop, lineLeft);
+        const tr = this.intersectHV(lineTop, lineRight);
+        const br = this.intersectHV(lineBot, lineRight);
+        const bl = this.intersectHV(lineBot, lineLeft);
+
+        if (!tl || !tr || !br || !bl) return null;
+
+        // Normalizza in [0..1]
+        const norm = [tl, tr, br, bl].map(p => ({
+          x: Math.max(0.01, Math.min(0.99, p.x / w)),
+          y: Math.max(0.01, Math.min(0.99, p.y / h))
+        }));
+
+        // Controllo coerenza geometrica (quadrilatero convesso non degenere)
+        const area = 0.5 * Math.abs(
+          (norm[0].x * norm[1].y - norm[1].x * norm[0].y) +
+          (norm[1].x * norm[2].y - norm[2].x * norm[1].y) +
+          (norm[2].x * norm[3].y - norm[3].x * norm[2].y) +
+          (norm[3].x * norm[0].y - norm[0].x * norm[3].y)
+        );
+        if (area < 0.14 || area > 0.96) return null;
+
+        return norm;
+      },
+
+      // Regressione lineare iterativa con pesatura Huber (ignora outlier come dita sui bordi)
+      fitLineRobust(pts, swapXY) {
+        const data = pts.map(p => swapXY ? { u: p.y, v: p.x } : { u: p.x, v: p.y });
+        let weights = new Float32Array(data.length).fill(1);
+        let m = 0, q = 0;
+
+        for (let iter = 0; iter < 4; iter++) {
+          let sw = 0, su = 0, sv = 0, suu = 0, suv = 0;
+          for (let i = 0; i < data.length; i++) {
+            const w = weights[i];
+            const u = data[i].u, v = data[i].v;
+            sw += w; su += w * u; sv += w * v;
+            suu += w * u * u; suv += w * u * v;
+          }
+          const denom = sw * suu - su * su;
+          if (Math.abs(denom) < 1e-6) return null;
+          m = (sw * suv - su * sv) / denom;
+          q = (sv - m * su) / sw;
+
+          for (let i = 0; i < data.length; i++) {
+            const err = Math.abs(data[i].v - (m * data[i].u + q));
+            weights[i] = err < 3.5 ? 1.0 : 3.5 / (err * err);
+          }
+        }
+        return { m, q };
+      },
+
+      // Intersezione tra retta orizzontale (y = m1*x + q1) e verticale (x = m2*y + q2)
+      intersectHV(hLine, vLine) {
+        const denom = 1 - hLine.m * vLine.m;
+        if (Math.abs(denom) < 1e-5) return null;
+        const x = (vLine.m * hLine.q + vLine.q) / denom;
+        const y = hLine.m * x + hLine.q;
+        return { x, y };
+      }
+    };
+
+    /* =========================================================================
+       7. ACQUISIZIONE FOTOCAMERA LIVE & RILEVAMENTO IN TEMPO REALE
        ========================================================================= */
     function openScanActionSheet() {
       appendingToActiveDoc = false;
@@ -910,9 +1139,12 @@
 
     async function openLiveCamera() {
       batchQueue = [];
+      smoothedLiveCorners = null;
+      lastValidLiveCorners = null;
       updateBatchUI();
       document.getElementById('camera-modal').classList.remove('hidden');
       await startCameraStream();
+      startLiveEdgeLoop();
     }
 
     async function startCameraStream() {
@@ -934,6 +1166,7 @@
     }
 
     function closeLiveCamera() {
+      stopLiveEdgeLoop();
       if (cameraStream) {
         cameraStream.getTracks().forEach(t => t.stop());
         cameraStream = null;
@@ -942,8 +1175,81 @@
       document.getElementById('camera-modal').classList.add('hidden');
     }
 
+    function toggleLiveEdgeDetection() {
+      liveDetectEnabled = !liveDetectEnabled;
+      const btn = document.getElementById('btn-live-detect');
+      btn.textContent = liveDetectEnabled ? 'Auto-Bordi ON' : 'Auto-Bordi OFF';
+      btn.className = liveDetectEnabled
+        ? 'px-2.5 py-1 rounded-full bg-[#34C759]/25 text-[#34C759] text-xs font-semibold border border-[#34C759]/40'
+        : 'px-2.5 py-1 rounded-full bg-white/10 text-gray-300 text-xs font-semibold border border-white/20';
+      if (!liveDetectEnabled) {
+        document.getElementById('live-edge-svg').innerHTML = '';
+        document.getElementById('live-detect-badge').textContent = 'Rilevamento automatico disattivato';
+      }
+    }
+
+    function startLiveEdgeLoop() {
+      stopLiveEdgeLoop();
+      liveDetectTimer = setInterval(() => {
+        if (!liveDetectEnabled) return;
+        const video = document.getElementById('camera-video');
+        if (!video || video.readyState < 2) return;
+
+        const detected = DocumentDetector.detect(video);
+        const svg = document.getElementById('live-edge-svg');
+        const badge = document.getElementById('live-detect-badge');
+
+        if (detected) {
+          lastValidLiveCorners = detected;
+          if (!smoothedLiveCorners) {
+            smoothedLiveCorners = detected.map(p => ({ ...p }));
+          } else {
+            // Interpolazione fluida anti-tremolio
+            for (let i = 0; i < 4; i++) {
+              smoothedLiveCorners[i].x += (detected[i].x - smoothedLiveCorners[i].x) * 0.42;
+              smoothedLiveCorners[i].y += (detected[i].y - smoothedLiveCorners[i].y) * 0.42;
+            }
+          }
+
+          // Mappa coordinate video (object-cover) sullo schermo
+          const vw = video.videoWidth, vh = video.videoHeight;
+          const cw = video.clientWidth, ch = video.clientHeight;
+          const scale = Math.max(cw / vw, ch / vh);
+          const dispW = vw * scale, dispH = vh * scale;
+          const offX = (cw - dispW) / 2;
+          const offY = (ch - dispH) / 2;
+
+          const screenPts = smoothedLiveCorners.map(p => ({
+            x: offX + p.x * dispW,
+            y: offY + p.y * dispH
+          }));
+
+          const polyStr = screenPts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+          const circles = screenPts.map(p => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="6" fill="#34C759" stroke="#FFFFFF" stroke-width="2" />`).join('');
+          svg.innerHTML = `<polygon points="${polyStr}" fill="rgba(52, 199, 89, 0.18)" stroke="#34C759" stroke-width="3" stroke-linejoin="round" />${circles}`;
+
+          badge.textContent = 'Documento agganciato • Pronto allo scatto';
+          badge.className = 'bg-[#34C759]/85 backdrop-blur-md text-white text-xs font-semibold px-3.5 py-1 rounded-full shadow';
+        } else {
+          smoothedLiveCorners = null;
+          lastValidLiveCorners = null;
+          svg.innerHTML = '';
+          badge.textContent = 'Inquadra il documento su sfondo contrastante';
+          badge.className = 'bg-black/65 backdrop-blur-md text-white/90 text-xs font-medium px-3 py-1 rounded-full border border-white/15';
+        }
+      }, 160);
+    }
+
+    function stopLiveEdgeLoop() {
+      if (liveDetectTimer) {
+        clearInterval(liveDetectTimer);
+        liveDetectTimer = null;
+      }
+    }
+
     async function switchCameraFacing() {
       facingMode = facingMode === 'environment' ? 'user' : 'environment';
+      smoothedLiveCorners = null;
       await startCameraStream();
     }
 
@@ -979,7 +1285,12 @@
       canvas.getContext('2d').drawImage(video, 0, 0);
       const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
 
-      batchQueue.push(dataUrl);
+      // Conserva gli angoli già agganciati in tempo reale se disponibili
+      const capturedCorners = smoothedLiveCorners
+        ? smoothedLiveCorners.map(p => ({ x: p.x * video.videoWidth, y: p.y * video.videoHeight }))
+        : null;
+
+      batchQueue.push({ dataUrl, presetCorners: capturedCorners });
       updateBatchUI();
     }
 
@@ -989,7 +1300,7 @@
         btn.classList.add('hidden');
       } else {
         btn.classList.remove('hidden');
-        document.getElementById('batch-thumb').src = batchQueue[batchQueue.length - 1];
+        document.getElementById('batch-thumb').src = batchQueue[batchQueue.length - 1].dataUrl;
         document.getElementById('batch-count').textContent = batchQueue.length;
       }
     }
@@ -997,7 +1308,7 @@
     function finishBatchCapture() {
       const captured = [...batchQueue];
       closeLiveCamera();
-      enqueueImagesForCrop(captured);
+      enqueueItemsForCrop(captured);
     }
 
     function handleFilesSelected(e) {
@@ -1007,19 +1318,20 @@
 
       Promise.all(files.map(file => new Promise(resolve => {
         const reader = new FileReader();
-        reader.onload = ev => resolve(ev.target.result);
+        reader.onload = ev => resolve({ dataUrl: ev.target.result, presetCorners: null });
         reader.readAsDataURL(file);
-      }))).then(dataUrls => {
-        enqueueImagesForCrop(dataUrls);
+      }))).then(items => {
+        enqueueItemsForCrop(items);
       });
     }
 
     /* =========================================================================
-       7. MOTORE RILEVAMENTO BORDI AVANZATO (GRADIENTE SOBEL + POLIGONO 4 ANGOLI)
+       8. RITAGLIO PROSPETTICO & CORREZIONE OMOGRAFICA
        ========================================================================= */
-    function enqueueImagesForCrop(dataUrls, targetDocId = null, targetPageIdx = null) {
-      cropQueue = dataUrls.map(url => ({
-        rawDataUrl: url,
+    function enqueueItemsForCrop(items, targetDocId = null, targetPageIdx = null) {
+      cropQueue = items.map(it => ({
+        rawDataUrl: it.dataUrl,
+        presetCorners: it.presetCorners || null,
         targetDocId: appendingToActiveDoc ? activeDocId : targetDocId,
         targetPageIdx: targetPageIdx !== null ? targetPageIdx : null
       }));
@@ -1045,7 +1357,12 @@
       cropImg.onload = () => {
         document.getElementById('crop-modal').classList.remove('hidden');
         setupCropCanvas();
-        autoDetectDocumentEdges(true);
+        if (currentCropItem.presetCorners) {
+          cropCorners = currentCropItem.presetCorners;
+          updateCropHandlesUI();
+        } else {
+          autoDetectDocumentEdges(true);
+        }
       };
       cropImg.src = currentCropItem.rawDataUrl;
     }
@@ -1078,151 +1395,27 @@
       updateCropHandlesUI();
     }
 
-    // Rilevamento bordi ad alta precisione: sfocatura gaussiana + gradiente Sobel + ricerca 4 angoli estremi del quadrilatero
     function autoDetectDocumentEdges(silent = false) {
-      const w = 240;
-      const h = Math.max(120, Math.round(cropImg.height * (w / cropImg.width)));
-      const tmp = document.createElement('canvas');
-      tmp.width = w;
-      tmp.height = h;
-      const ctx = tmp.getContext('2d');
-      ctx.drawImage(cropImg, 0, 0, w, h);
-      const rgba = ctx.getImageData(0, 0, w, h).data;
-
-      // 1. Scala di grigi
-      const gray = new Float32Array(w * h);
-      for (let i = 0; i < w * h; i++) {
-        const idx = i * 4;
-        gray[i] = 0.299 * rgba[idx] + 0.587 * rgba[idx + 1] + 0.114 * rgba[idx + 2];
+      const norm = DocumentDetector.detect(cropImg);
+      if (norm) {
+        cropCorners = norm.map(p => ({
+          x: p.x * cropImg.width,
+          y: p.y * cropImg.height
+        }));
+        updateCropHandlesUI();
+        if (!silent) showToast('Bordi documento rilevati con precisione');
+      } else {
+        const mx = cropImg.width * 0.06;
+        const my = cropImg.height * 0.06;
+        cropCorners = [
+          { x: mx, y: my },
+          { x: cropImg.width - mx, y: my },
+          { x: cropImg.width - mx, y: cropImg.height - my },
+          { x: mx, y: cropImg.height - my }
+        ];
+        updateCropHandlesUI();
+        if (!silent) showToast('Rifinisci gli angoli con le maniglie blu');
       }
-
-      // 2. Sfocatura 3x3 per rimuovere il rumore del testo interno al foglio
-      const blur = new Float32Array(w * h);
-      for (let y = 1; y < h - 1; y++) {
-        for (let x = 1; x < w - 1; x++) {
-          let sum = 0;
-          for (let dy = -1; dy <= 1; dy++) {
-            for (let dx = -1; dx <= 1; dx++) {
-              sum += gray[(y + dy) * w + (x + dx)];
-            }
-          }
-          blur[y * w + x] = sum / 9;
-        }
-      }
-
-      // 3. Stima colore sfondo dai bordi esterni dell'inquadratura
-      let bgSum = 0, bgCount = 0;
-      for (let x = 2; x < w - 2; x++) {
-        bgSum += blur[2 * w + x] + blur[(h - 3) * w + x];
-        bgCount += 2;
-      }
-      for (let y = 2; y < h - 2; y++) {
-        bgSum += blur[y * w + 2] + blur[y * w + (w - 3)];
-        bgCount += 2;
-      }
-      const bgMean = bgSum / bgCount;
-
-      // 4. Gradiente Sobel + contrasto rispetto allo sfondo
-      const mag = new Float32Array(w * h);
-      let maxMag = 0;
-      for (let y = 2; y < h - 2; y++) {
-        for (let x = 2; x < w - 2; x++) {
-          const idx = y * w + x;
-          const gx = -blur[idx - w - 1] + blur[idx - w + 1] - 2 * blur[idx - 1] + 2 * blur[idx + 1] - blur[idx + w - 1] + blur[idx + w + 1];
-          const gy = -blur[idx - w - 1] - 2 * blur[idx - w] - blur[idx - w + 1] + blur[idx + w - 1] + 2 * blur[idx + w] + blur[idx + w + 1];
-          const g = Math.hypot(gx, gy);
-          mag[idx] = g;
-          if (g > maxMag) maxMag = g;
-        }
-      }
-
-      // 5. Maschera regione documento (punti con forte gradiente perimetrale o stacco netto dallo sfondo)
-      const edgeThresh = Math.max(28, maxMag * 0.18);
-      const lumDiffThresh = 26;
-      const mask = new Uint8Array(w * h);
-
-      // Scansione per righe e colonne per trovare il perimetro esterno del foglio
-      const rowLeft = new Int32Array(h).fill(-1);
-      const rowRight = new Int32Array(h).fill(-1);
-      const margin = 4;
-
-      for (let y = margin; y < h - margin; y++) {
-        for (let x = margin; x < w - margin; x++) {
-          const idx = y * w + x;
-          if (mag[idx] > edgeThresh || Math.abs(blur[idx] - bgMean) > lumDiffThresh) {
-            rowLeft[y] = x;
-            break;
-          }
-        }
-        for (let x = w - margin - 1; x >= margin; x--) {
-          const idx = y * w + x;
-          if (mag[idx] > edgeThresh || Math.abs(blur[idx] - bgMean) > lumDiffThresh) {
-            rowRight[y] = x;
-            break;
-          }
-        }
-        if (rowLeft[y] !== -1 && rowRight[y] > rowLeft[y] + w * 0.25) {
-          mask[y * w + rowLeft[y]] = 1;
-          mask[y * w + rowRight[y]] = 1;
-        }
-      }
-
-      // 6. Trova i 4 angoli estremi del quadrilatero (min/max x+y e x-y) sul perimetro rilevato
-      let tl = null, tr = null, br = null, bl = null;
-      let minSum = Infinity, maxSum = -Infinity, minDiff = Infinity, maxDiff = -Infinity;
-      let contourPts = 0;
-
-      for (let y = margin; y < h - margin; y++) {
-        for (let x = margin; x < w - margin; x++) {
-          if (mask[y * w + x]) {
-            contourPts++;
-            const sum = x + y;
-            const diff = x - y;
-            if (sum < minSum) { minSum = sum; tl = { x, y }; }
-            if (sum > maxSum) { maxSum = sum; br = { x, y }; }
-            if (diff > maxDiff) { maxDiff = diff; tr = { x, y }; }
-            if (diff < minDiff) { minDiff = diff; bl = { x, y }; }
-          }
-        }
-      }
-
-      const sx = cropImg.width / w;
-      const sy = cropImg.height / h;
-
-      if (contourPts > 20 && tl && tr && br && bl) {
-        const quadArea = 0.5 * Math.abs(
-          (tl.x * tr.y - tr.x * tl.y) +
-          (tr.x * br.y - br.x * tr.y) +
-          (br.x * bl.y - bl.x * br.y) +
-          (bl.x * tl.y - tl.x * bl.y)
-        );
-        const totalArea = w * h;
-
-        // Verifica che l'area rilevata sia plausibile (tra il 18% e il 96% dell'immagine)
-        if (quadArea > totalArea * 0.18 && quadArea < totalArea * 0.96) {
-          cropCorners = [
-            { x: Math.max(0, tl.x * sx), y: Math.max(0, tl.y * sy) },
-            { x: Math.min(cropImg.width, tr.x * sx), y: Math.max(0, tr.y * sy) },
-            { x: Math.min(cropImg.width, br.x * sx), y: Math.min(cropImg.height, br.y * sy) },
-            { x: Math.max(0, bl.x * sx), y: Math.min(cropImg.height, bl.y * sy) }
-          ];
-          updateCropHandlesUI();
-          if (!silent) showToast('Bordi documento rilevati');
-          return;
-        }
-      }
-
-      // Fallback intelligente con margine leggero se il foglio occupa quasi tutto lo schermo
-      const mx = cropImg.width * 0.05;
-      const my = cropImg.height * 0.05;
-      cropCorners = [
-        { x: mx, y: my },
-        { x: cropImg.width - mx, y: my },
-        { x: cropImg.width - mx, y: cropImg.height - my },
-        { x: mx, y: cropImg.height - my }
-      ];
-      updateCropHandlesUI();
-      if (!silent) showToast('Rifinisci gli angoli con le maniglie blu');
     }
 
     function resetFullFrameCrop() {
@@ -1244,6 +1437,7 @@
       ctx.rotate((deg * Math.PI) / 180);
       ctx.drawImage(cropImg, -cropImg.width / 2, -cropImg.height / 2);
       currentCropItem.rawDataUrl = c.toDataURL('image/jpeg', 0.92);
+      currentCropItem.presetCorners = null;
       cropImg.src = currentCropItem.rawDataUrl;
     }
 
@@ -1280,7 +1474,6 @@
       `;
     }
 
-    // Gestione trascinamento maniglie + lente
     (function bindCropHandles() {
       const stage = document.getElementById('crop-stage');
       const magnifier = document.getElementById('magnifier');
@@ -1337,7 +1530,6 @@
       });
     })();
 
-    // Trasformazione Omografica (Warp Perspective)
     function computeHomography(src, dst) {
       const A = [];
       for (let i = 0; i < 4; i++) {
@@ -1485,7 +1677,7 @@
     }
 
     /* =========================================================================
-       8. MOTORE FILTRI POTENZIATO (B/N ADATTIVO ANTI-OMBRE, FOTO, ORIGINALE)
+       9. MOTORE FILTRI POTENZIATO (B/N ADATTIVO ANTI-OMBRE, FOTO, ORIGINALE)
        ========================================================================= */
     function applyFilterToDataUrl(dataUrl, filterType, brightness = 0, contrast = 0) {
       return new Promise(resolve => {
@@ -1507,18 +1699,14 @@
           const imgData = ctx.getImageData(0, 0, w, h);
           const d = imgData.data;
 
-          // FILTRO B/N PROFESSIONALE CON SOGLIA ADATTIVA LOCALE (INTEGRAL IMAGE)
-          // Rimuove ombre, pieghe e illuminazione irregolare mantenendo il testo nitido
           if (filterType === 'bw') {
             const total = w * h;
             const gray = new Float32Array(total);
             for (let i = 0; i < total; i++) {
               const p = i * 4;
-              // Pesatura luminanza che enfatizza l'inchiostro blu/nero su carta
               gray[i] = 0.299 * d[p] + 0.587 * d[p + 1] + 0.114 * d[p + 2];
             }
 
-            // Immagine integrale per calcolare la media locale in O(1)
             const integral = new Float64Array((w + 1) * (h + 1));
             for (let y = 0; y < h; y++) {
               let rowSum = 0;
@@ -1528,9 +1716,7 @@
               }
             }
 
-            // Raggio finestra locale proporzionale alla dimensione immagine
             const radius = Math.max(18, Math.round(Math.min(w, h) * 0.032));
-            // Sensibilità regolabile tramite slider luminosità/contrasto
             const sensitivity = 0.13 - (Number(brightness) * 0.0012);
             const sharpness = 2.8 + (Number(contrast) * 0.03);
 
@@ -1554,10 +1740,8 @@
 
                 let out;
                 if (val >= threshold) {
-                  // Sfondo carta bianco puro
                   out = 255;
                 } else {
-                  // Inchiostro scuro con anti-aliasing morbido sui bordi dei caratteri
                   const diff = (threshold - val) * sharpness;
                   out = Math.max(0, Math.min(255, 255 - diff * 3.2));
                 }
@@ -1572,7 +1756,6 @@
             return;
           }
 
-          // FILTRO FOTO / ORIGINALE
           let bOffset = Number(brightness);
           let cFactor = Number(contrast);
           if (filterType === 'photo') {
@@ -1599,7 +1782,7 @@
     }
 
     /* =========================================================================
-       9. VISUALIZZATORE DOCUMENTO, FILTRI & ROTAZIONE
+       10. VISUALIZZATORE DOCUMENTO, FILTRI & ROTAZIONE
        ========================================================================= */
     function openDocumentViewer(docId, pageIndex = 0) {
       activeDocId = docId;
@@ -1748,7 +1931,7 @@
     function reCropCurrentPage() {
       const doc = getActiveDoc();
       const page = doc.pages[activePageIdx];
-      enqueueImagesForCrop([page.rawUrl], doc.id, activePageIdx);
+      enqueueItemsForCrop([{ dataUrl: page.rawUrl, presetCorners: null }], doc.id, activePageIdx);
     }
 
     async function deleteCurrentPage() {
@@ -1762,7 +1945,7 @@
     }
 
     /* =========================================================================
-       10. ESPORTAZIONE PDF MULTI-PAGINA, CONDIVISIONE & GESTIONE
+       11. ESPORTAZIONE PDF MULTI-PAGINA, CONDIVISIONE & GESTIONE
        ========================================================================= */
     function openExportShareSheet() {
       document.getElementById('export-sheet').classList.remove('hidden');
@@ -1900,7 +2083,7 @@
     }
 
     /* =========================================================================
-       11. IMPOSTAZIONI & BACKUP
+       12. IMPOSTAZIONI & BACKUP
        ========================================================================= */
     function loadSettingsUI() {
       document.getElementById('setting-pdf-size').value = settings.pdfSize || 'a4';
